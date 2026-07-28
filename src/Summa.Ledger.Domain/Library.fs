@@ -1,1 +1,0 @@
-namespace Summa.Ledger.Domain
