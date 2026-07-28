@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Summa.Ledger.Domain/Summa.Ledger.Domain.fsproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Summa.Ledger.Domain.Tests/Summa.Ledger.Domain.Tests.fsproj" />
+  </Folder>
+</Solution>
