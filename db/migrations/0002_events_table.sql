@@ -1,4 +1,4 @@
-CREATE TABLE events (
+CREATE TABLE ledger.events (
     seq             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     transaction_id  UUID NOT NULL,
     occurred_at     TIMESTAMPTZ NOT NULL,

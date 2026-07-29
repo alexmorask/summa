@@ -1,8 +1,10 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Summa.Ledger.Domain/Summa.Ledger.Domain.fsproj" />
+    <Project Path="src/Summa.Ledger.Store/Summa.Ledger.Store.fsproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Summa.Ledger.Domain.Tests/Summa.Ledger.Domain.Tests.fsproj" />
+    <Project Path="tests/Summa.Ledger.Store.Tests/Summa.Ledger.Store.Tests.fsproj" />
   </Folder>
 </Solution>
