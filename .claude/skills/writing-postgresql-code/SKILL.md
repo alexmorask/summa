@@ -25,13 +25,13 @@ Scope note: this skill covers the SQL *content* — schema design, constraints, 
    - The event payload is `jsonb`.
    - The projection write and checkpoint advance happen in the same transaction — never as two independently-committed statements.
 
-5. Migration file organization (naming, location, forward-only vs. reversible, whether a tool like DbUp/FluentMigrator manages apply order) is **not yet decided** — this is an open item for Stage 5. Do not assume a convention; ask the owner if it's genuinely unclear at the point of writing, and once resolved, invoke `recording-decisions` to log it in `docs/decisions.md`. This stub does not block writing correct SQL *content* — schema design and query correctness per the reference file apply regardless of how migrations end up being organized.
+5. Migration file organization is decided (see `docs/decisions.md`, Stack table, 2026-07-29): plain, sequentially-numbered `.sql` files (e.g. `0001_events_table.sql`) in `db/migrations/`, applied manually via psql for now — no DbUp/FluentMigrator/Evolve. **Forward-only**: never write a down script or roll back in place. A correction is a *new* migration that reverses or fixes a previous one — the same append-only, reversing-entry shape as the ledger's own domain rule, not a separate rollback mechanism. Number new migrations sequentially after the highest existing prefix in `db/migrations/`.
 
 6. After the plan is approved, write the SQL (and, where applicable, coordinate with `writing-fsharp-code` for the surrounding F#).
 
 7. After writing, explain every non-obvious Postgres construct used, in the chat reply — never in code comments. This is mandatory, not optional polish, same as the F# skill's equivalent step.
 
-8. If planning or writing surfaced a genuinely new decision — an indexing strategy, a `jsonb` structure choice, how the `ON CONFLICT` gap gets resolved, the migration-tooling call from step 5 — invoke `recording-decisions` before considering the task done.
+8. If planning or writing surfaced a genuinely new decision not already covered by step 4/5's resolved invariants — an indexing strategy, a `jsonb` structure choice, how the `ON CONFLICT` gap gets resolved — invoke `recording-decisions` before considering the task done.
 
 ## Additional resources
 
@@ -42,4 +42,4 @@ Scope note: this skill covers the SQL *content* — schema design, constraints, 
 ### Related skills
 
 - **`writing-fsharp-code`** — applies simultaneously whenever the SQL is called from `Summa.Ledger.Store`; owns the F#-side calling convention (`task`, `use`, parameterization) this skill doesn't duplicate.
-- **`recording-decisions`** — invoked from step 8 whenever a decision surfaces, including the deferred migration-tooling call from step 5.
+- **`recording-decisions`** — invoked from step 8 whenever a new decision surfaces (the migration-tooling call itself is already resolved, per step 5).

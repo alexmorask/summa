@@ -81,6 +81,10 @@ if one seems wrong, say so and let the owner decide.
 
 ## Status
 
-Pre-code. The design is complete for the ledger vertical slice; implementation
-starts at Stage 1 of `docs/build-plan.md`. Update this section as the slice
-progresses, and add build/test commands here once they exist.
+Through Stage 5 of `docs/build-plan.md` (local Postgres + event table schema).
+Implementation is underway; update this section as the slice progresses.
+
+- Build: `dotnet build`
+- Test: `dotnet test`
+- Local Postgres: `docker compose up -d`
+- Apply migrations: `./db/migrate.sh`

@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: summa
+      POSTGRES_PASSWORD: summa
+      POSTGRES_DB: summa
+    ports:
+      - "5432:5432"
+    volumes:
+      - summa-postgres-data:/var/lib/postgresql/data
+
+volumes:
+  summa-postgres-data:

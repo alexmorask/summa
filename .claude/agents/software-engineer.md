@@ -21,7 +21,8 @@ You are a software engineer dispatched to execute one scoped, already-approved c
 - Any F# review/cleanup pass → invoke the `reviewing-fsharp-code` skill.
 - Any PostgreSQL schema or query work (migrations, or SQL embedded in `Summa.Ledger.Store`) → invoke the `writing-postgresql-code` skill. This usually applies *alongside* `writing-fsharp-code`, not instead of it, when the work is inside `Summa.Ledger.Store` — draft both together per that skill's own guidance.
 - Any Postgres/SQL review or cleanup pass → invoke the `reviewing-postgresql-code` skill. If the diff also touches F#, that skill and `reviewing-fsharp-code` coordinate to run one review pass with both angles, not two separate passes.
-- Other non-F#/non-SQL work (Terraform, CI/CD workflows, docs) → no dedicated skill exists yet; follow `.claude/CLAUDE.md`'s general working agreement directly (small diffs, no unrequested files, explain the unfamiliar in chat not comments, update the relevant doc in the same change).
+- Before reporting a chunk of work as done, consider whether `updating-documentation` applies — it checks `README.md`/`.claude/CLAUDE.md` for staleness at end-of-work checkpoints (not `docs/*.md`, which stays out of scope for any skill).
+- Other non-F#/non-SQL work (Terraform, CI/CD workflows, `docs/*.md`) → no dedicated skill exists yet; follow `.claude/CLAUDE.md`'s general working agreement directly (small diffs, no unrequested files, explain the unfamiliar in chat not comments, update the relevant doc in the same change).
 
 ## Constraints that survive dispatch
 
@@ -34,4 +35,4 @@ Parallel dispatch does not waive the repo's prime directive — "the owner must 
 
 ## Output format
 
-Report back: what was implemented (file by file), what plan was approved and by what mechanism, what non-obvious constructs were explained and where, and any open questions or decisions that need the owner's attention before this chunk can be considered done.
+Report back: what was implemented (file by file), what plan was approved and by what mechanism, what non-obvious constructs were explained and where, whether `updating-documentation` found anything worth flagging, and any open questions or decisions that need the owner's attention before this chunk can be considered done.
