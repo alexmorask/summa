@@ -3,6 +3,7 @@
     <Project Path="src/Summa.Ledger.Domain/Summa.Ledger.Domain.fsproj" />
     <Project Path="src/Summa.Ledger.Store/Summa.Ledger.Store.fsproj" />
     <Project Path="src/Summa.Ledger.Api/Summa.Ledger.Api.fsproj" />
+    <Project Path="src/Summa.Ledger.Projections/Summa.Ledger.Projections.fsproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Summa.Ledger.Domain.Tests/Summa.Ledger.Domain.Tests.fsproj" />

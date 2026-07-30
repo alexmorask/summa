@@ -81,8 +81,9 @@ if one seems wrong, say so and let the owner decide.
 
 ## Status
 
-Through Stage 8 of `docs/build-plan.md` (HTTP API write endpoint), plus an
-integration-test addendum (`Summa.Ledger.Api.Tests.Integration`) covering it.
+Through Stage 9 of `docs/build-plan.md` (account_balances projection +
+checkpoint worker), plus the Stage 8 integration-test addendum
+(`Summa.Ledger.Api.Tests.Integration`).
 Implementation is underway; update this section as the slice progresses.
 
 - Build: `dotnet build`
@@ -90,3 +91,4 @@ Implementation is underway; update this section as the slice progresses.
 - Local Postgres: `docker compose up -d`
 - Apply migrations: `./db/migrate.sh`
 - Run the API: `dotnet run --project src/Summa.Ledger.Api`
+- Run the projection worker: `dotnet run --project src/Summa.Ledger.Projections`

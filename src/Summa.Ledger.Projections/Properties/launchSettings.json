@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Summa.Ledger.Projections": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "DOTNET_ENVIRONMENT": "Development"
+      }
+    }
+  }
+}
