@@ -93,3 +93,30 @@ let ``POST transactions with malformed JSON returns 400`` () : Task =
         let! error = response.Content.ReadFromJsonAsync<ErrorResponse>(Serialization.options)
         Assert.Equal("malformed JSON body", error.Error)
     }
+
+[<Fact>]
+let ``GET accounts balance for an unknown account returns 404`` () : Task =
+    task {
+        let account = $"integration-test-unknown:{Guid.NewGuid()}"
+
+        let! response = client.GetAsync($"/accounts/{account}/balance")
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode)
+        let! error = response.Content.ReadFromJsonAsync<ErrorResponse>(Serialization.options)
+        Assert.Equal("no such account", error.Error)
+    }
+
+[<Fact>]
+let ``GET trial-balance reports a balanced ledger`` () : Task =
+    task {
+        let body = request (Guid.NewGuid().ToString()) balancedEntries
+        let! posted = client.PostAsJsonAsync("/transactions", body, Serialization.options)
+        Assert.Equal(HttpStatusCode.OK, posted.StatusCode)
+
+        let! response = client.GetAsync("/trial-balance")
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode)
+        let! trialBalance = response.Content.ReadFromJsonAsync<TrialBalanceResponse>(Serialization.options)
+        Assert.Equal(0L, trialBalance.Balance)
+        Assert.True(trialBalance.Balanced)
+    }

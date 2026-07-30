@@ -13,4 +13,8 @@ type PostTransactionRequest =
 
 type PostTransactionResponse = { Id : Guid }
 
+type AccountBalanceResponse = { AccountId : string; Balance : int64 }
+
+type TrialBalanceResponse = { Balance : int64; Balanced : bool }
+
 type ErrorResponse = { Error : string }

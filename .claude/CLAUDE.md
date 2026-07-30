@@ -81,9 +81,9 @@ if one seems wrong, say so and let the owner decide.
 
 ## Status
 
-Through Stage 9 of `docs/build-plan.md` (account_balances projection +
-checkpoint worker), plus the Stage 8 integration-test addendum
-(`Summa.Ledger.Api.Tests.Integration`).
+Through Stage 10 of `docs/build-plan.md` (read endpoints + rebuild), plus the
+Stage 8 integration-test addendum (`Summa.Ledger.Api.Tests.Integration`),
+kept current through Stage 10.
 Implementation is underway; update this section as the slice progresses.
 
 - Build: `dotnet build`
@@ -92,3 +92,4 @@ Implementation is underway; update this section as the slice progresses.
 - Apply migrations: `./db/migrate.sh`
 - Run the API: `dotnet run --project src/Summa.Ledger.Api`
 - Run the projection worker: `dotnet run --project src/Summa.Ledger.Projections`
+- Rebuild the projection: `./db/rebuild.sh` (then restart the worker)
