@@ -22,8 +22,8 @@ failed. Prefer the smallest change that teaches the concept.
    unless the stage asks for it.
 5. **Small diffs.** If a change will exceed ~5 files or a few hundred lines,
    stop and propose a split.
-6. **Explain the unfamiliar.** Any F#, SQL, or Terraform construct that isn't
-   obvious — explain it in chat, not in code comments.
+6. **Explain the unfamiliar.** Any F#, SQL, Terraform, Docker, or GitHub Actions
+   construct that isn't obvious — explain it in chat, not in code comments.
 7. **Update the docs in the same change.** A decision made while coding gets a
    row in `docs/decisions.md`; a design change updates the relevant doc.
 

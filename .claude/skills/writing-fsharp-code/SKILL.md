@@ -34,7 +34,7 @@ Implement F# code for the Summa ledger idiomatically, while honoring this repo's
 
 ### Reference files
 
-- **`../references/fsharp-idioms.md`** — formatting, component design, domain modeling, performance, error handling, testing, advanced-pattern evaluation, and a list of F# anti-patterns to avoid introducing. Shared with the `reviewing-fsharp-code` skill; lives at the `skills/` level, not owned by either.
+- **`../references/fsharp-idioms.md`** — formatting, component design, domain modeling, performance, error handling, testing, advanced-pattern evaluation, and a list of F# anti-patterns to avoid introducing.
 
 ### Related skills
 

@@ -37,7 +37,7 @@ Scope note: this skill covers the SQL *content* — schema design, constraints, 
 
 ### Reference files
 
-- **`../references/postgres-idioms.md`** — naming conventions, identity columns, `jsonb`, the `ON CONFLICT`/`RETURNING` correctness callout, constraints, indexing, transactions/isolation, query review habits, and Postgres anti-patterns. Shared with `reviewing-postgresql-code`.
+- **`../references/postgres-idioms.md`** — naming conventions, identity columns, `jsonb`, the `ON CONFLICT`/`RETURNING` correctness callout, constraints, indexing, transactions/isolation, query review habits, and Postgres anti-patterns.
 
 ### Related skills
 

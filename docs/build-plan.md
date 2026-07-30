@@ -26,8 +26,9 @@ Rules to hold the agent to on every stage:
    sample data unless the stage asks for it.
 5. **Small diffs.** If a stage looks like it will exceed ~5 files or a few
    hundred lines, stop and split it.
-6. **Explain the unfamiliar.** Any F#, SQL, or Terraform construct you don't
-   recognize — make the agent explain it in the chat, not in code comments.
+6. **Explain the unfamiliar.** Any F#, SQL, Terraform, Docker, or GitHub Actions
+   construct you don't recognize — make the agent explain it in the chat, not in
+   code comments.
 7. **You write the commit message.** If you can't summarize the change
    accurately, you don't understand it yet.
 
@@ -260,15 +261,39 @@ transaction updates balances read back through the deployed API.
 **Understand:** ACA revisions and scaling; how secrets are injected; how the
 worker differs from the API (no ingress, always-on).
 
-### Stage 14 — GitHub Actions: CI, then CD
+### Stage 14a — GitHub Actions: CI
 
-**Scope:** first a CI workflow (restore, build, test on PR). Only once that is
-green, a CD workflow (build images, push to ACR, apply Terraform, deploy).
-Two separate stages if the diff gets large.
+**Goal:** every PR proves it restores, builds, and passes tests before it can
+merge.
 
-**Understand:** why CI comes first; how the workflow authenticates to Azure (use
-OIDC federated credentials, not a long-lived secret); why `terraform apply` in CI
-needs remote state.
+**Scope:** `.github/workflows/ci.yml` — restore, build, test on PR (and on push
+to `main`). Add NuGet lock files (`RestorePackagesWithLockFile` +
+`packages.lock.json` per project, see `docs/decisions.md`) so
+`actions/setup-dotnet`'s built-in `cache: true` has something to key on.
+
+**Acceptance:** a PR shows a green restore/build/test run; a failing test blocks
+the run from going green.
+
+**Understand:** why CI comes first — a red CD pipeline deploying broken code is
+worse than no CD pipeline; how `actions/setup-dotnet`'s cache keys on the
+lockfile hash.
+
+### Stage 14b — GitHub Actions: CD
+
+**Goal:** a merge to `main` deploys itself.
+
+**Scope:** `.github/workflows/cd.yml`, gated on 14a passing — build the Stage 11
+images, push to ACR, `terraform plan` then `apply` the Stage 12–13
+infrastructure, deploy. Only start this once 14a has been merged and is green.
+
+**Acceptance:** a merge to `main` produces a run that ends with the deployed API
+answering `/health` and reflecting the change; posting a transaction updates
+balances read back through the deployed API.
+
+**Understand:** how the workflow authenticates to Azure (OIDC federated
+credentials, not a long-lived secret); why `terraform apply` here needs the
+Stage 12 remote state backend; why the apply step is a `plan` followed by a
+gated `apply`, never a bare `-auto-approve` with no plan review.
 
 ---
 
