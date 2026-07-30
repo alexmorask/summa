@@ -7,6 +7,7 @@
 
   <ItemGroup>
     <Compile Include="EventStoreTests.fs" />
+    <Compile Include="HandlerTests.fs" />
   </ItemGroup>
 
   <ItemGroup>

@@ -9,6 +9,7 @@
     <Compile Include="EventStore.fs" />
     <Compile Include="Serialization.fs" />
     <Compile Include="PostgresEventStore.fs" />
+    <Compile Include="Handler.fs" />
   </ItemGroup>
 
   <ItemGroup>
