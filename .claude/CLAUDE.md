@@ -81,10 +81,12 @@ if one seems wrong, say so and let the owner decide.
 
 ## Status
 
-Through Stage 5 of `docs/build-plan.md` (local Postgres + event table schema).
+Through Stage 8 of `docs/build-plan.md` (HTTP API write endpoint), plus an
+integration-test addendum (`Summa.Ledger.Api.Tests.Integration`) covering it.
 Implementation is underway; update this section as the slice progresses.
 
 - Build: `dotnet build`
 - Test: `dotnet test`
 - Local Postgres: `docker compose up -d`
 - Apply migrations: `./db/migrate.sh`
+- Run the API: `dotnet run --project src/Summa.Ledger.Api`

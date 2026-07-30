@@ -6,7 +6,7 @@ open Summa.Ledger.Domain
 
 module Serialization =
 
-    let private options =
+    let options =
         JsonFSharpOptions.Default()
             .WithUnionUnwrapFieldlessTags()
             .ToJsonSerializerOptions()
