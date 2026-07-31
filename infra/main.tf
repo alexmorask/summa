@@ -8,12 +8,6 @@ resource "random_id" "suffix" {
   byte_length = 4
 }
 
-# Used to allowlist this machine's current public IP on the Postgres
-# firewall (see the database module) so migrations can run from here.
-data "http" "my_ip" {
-  url = "https://api.ipify.org"
-}
-
 resource "azurerm_resource_group" "main" {
   name     = "summa-rg"
   location = var.location
@@ -64,7 +58,7 @@ module "database" {
   location               = azurerm_resource_group.main.location
   administrator_login    = "summaadmin"
   administrator_password = var.postgres_admin_password
-  admin_ip_address       = data.http.my_ip.response_body
+  admin_ip_address       = var.admin_ip_address
   tags                   = local.tags
 }
 
