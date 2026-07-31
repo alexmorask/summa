@@ -2,6 +2,7 @@ module Summa.Ledger.Projections.Program
 
 open System
 open Microsoft.Extensions.Configuration
+open Microsoft.Extensions.DependencyInjection
 open Microsoft.Extensions.Hosting
 open Npgsql
 open Summa.Ledger.Store
@@ -13,7 +14,10 @@ let main args =
     let dataSource = NpgsqlDataSource.Create(connectionString)
     let eventStore = PostgresEventStore.create dataSource
 
-    Worker.run dataSource eventStore (TimeSpan.FromMilliseconds 500.0)
-    |> fun task -> task.GetAwaiter().GetResult()
+    builder.Services.AddHostedService<Worker.HostedService>(fun _ ->
+        new Worker.HostedService(dataSource, eventStore, TimeSpan.FromMilliseconds 500.0))
+    |> ignore
+
+    builder.Build().Run()
 
     0

@@ -1,7 +1,9 @@
 namespace Summa.Ledger.Projections
 
 open System
+open System.Threading
 open System.Threading.Tasks
+open Microsoft.Extensions.Hosting
 open Npgsql
 open Npgsql.FSharp
 open Summa.Ledger.Domain
@@ -34,22 +36,39 @@ module Worker =
             return ()
         }
 
-    let rec private loop (dataSource: NpgsqlDataSource) (eventStore: EventStore) (pollInterval: TimeSpan) (lastSeq: int64) : Task<unit> =
+    let rec private loop
+        (dataSource: NpgsqlDataSource)
+        (eventStore: EventStore)
+        (pollInterval: TimeSpan)
+        (stoppingToken: CancellationToken)
+        (lastSeq: int64)
+        : Task<unit> =
         task {
             let! newEvents = eventStore.ReadFrom lastSeq
             match newEvents with
             | [] ->
-                do! Task.Delay pollInterval
-                return! loop dataSource eventStore pollInterval lastSeq
+                do! Task.Delay(pollInterval, stoppingToken)
+                return! loop dataSource eventStore pollInterval stoppingToken lastSeq
             | events ->
                 let deltas = Fold.deltas events
                 let newLastSeq = events |> List.map (fun e -> e.Seq) |> List.max
                 do! applyBatch dataSource deltas newLastSeq
-                return! loop dataSource eventStore pollInterval newLastSeq
+                return! loop dataSource eventStore pollInterval stoppingToken newLastSeq
         }
 
-    let run (dataSource: NpgsqlDataSource) (eventStore: EventStore) (pollInterval: TimeSpan) : Task<unit> =
+    let run
+        (dataSource: NpgsqlDataSource)
+        (eventStore: EventStore)
+        (pollInterval: TimeSpan)
+        (stoppingToken: CancellationToken)
+        : Task<unit> =
         task {
             let! initialCheckpoint = readCheckpoint dataSource
-            return! loop dataSource eventStore pollInterval initialCheckpoint
+            return! loop dataSource eventStore pollInterval stoppingToken initialCheckpoint
         }
+
+    type HostedService(dataSource: NpgsqlDataSource, eventStore: EventStore, pollInterval: TimeSpan) =
+        inherit BackgroundService()
+
+        override _.ExecuteAsync(stoppingToken: CancellationToken) : Task =
+            run dataSource eventStore pollInterval stoppingToken
