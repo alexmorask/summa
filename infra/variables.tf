@@ -26,3 +26,9 @@ variable "budget_amount" {
   type        = number
   default     = 30
 }
+
+variable "image_tag" {
+  description = "Tag to pull for both the API and worker Container App images. Neither image has been pushed to the registry under any tag yet — see infra's Stage 13 verification steps."
+  type        = string
+  default     = "latest"
+}

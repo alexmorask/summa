@@ -27,3 +27,8 @@ output "tfstate_container_name" {
   description = "Blob container holding remote Terraform state, once migrated."
   value       = azurerm_storage_container.tfstate.name
 }
+
+output "api_url" {
+  description = "Public URL of the deployed API."
+  value       = "https://${module.container_apps.api_fqdn}"
+}

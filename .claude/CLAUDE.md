@@ -81,9 +81,12 @@ if one seems wrong, say so and let the owner decide.
 
 ## Status
 
-Through Stage 10 of `docs/build-plan.md` (read endpoints + rebuild), plus the
-Stage 8 integration-test addendum (`Summa.Ledger.Api.Tests.Integration`),
-kept current through Stage 10.
+Through Stage 11 of `docs/build-plan.md` (containerize), plus the Stage 8
+integration-test addendum (`Summa.Ledger.Api.Tests.Integration`) and the
+BackgroundService/IHostedService addendum for the projection worker
+(`docs/decisions.md`, 2026-07-31). Stage 12's Terraform (base infrastructure)
+is written and validated against the live subscription but deliberately not
+yet applied; Stage 13 (Container Apps) is in progress.
 Implementation is underway; update this section as the slice progresses.
 
 - Build: `dotnet build`
@@ -93,3 +96,4 @@ Implementation is underway; update this section as the slice progresses.
 - Run the API: `dotnet run --project src/Summa.Ledger.Api`
 - Run the projection worker: `dotnet run --project src/Summa.Ledger.Projections`
 - Rebuild the projection: `./db/rebuild.sh` (then restart the worker)
+- Run everything containerized: `docker compose up --build`

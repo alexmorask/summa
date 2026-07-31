@@ -62,6 +62,25 @@ module "database" {
   tags                   = local.tags
 }
 
+locals {
+  # Depends on the Postgres admin password, so Terraform automatically
+  # treats this whole value as sensitive too (redacted from plan/apply
+  # output the same way the password itself is).
+  postgres_connection_string = "Host=${module.database.fqdn};Port=5432;Username=summaadmin;Password=${var.postgres_admin_password};Database=${module.database.database_name};Ssl Mode=Require"
+}
+
+module "container_apps" {
+  source = "./modules/container-apps"
+
+  resource_group_name   = azurerm_resource_group.main.name
+  location              = azurerm_resource_group.main.location
+  registry_id           = module.registry.id
+  registry_login_server = module.registry.login_server
+  connection_string     = local.postgres_connection_string
+  image_tag             = var.image_tag
+  tags                  = local.tags
+}
+
 resource "azurerm_consumption_budget_resource_group" "main" {
   name              = "summa-budget"
   resource_group_id = azurerm_resource_group.main.id
