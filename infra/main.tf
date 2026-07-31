@@ -32,6 +32,13 @@ resource "azurerm_storage_account" "tfstate" {
   # (which can contain secrets in plaintext, e.g. the Postgres password).
   allow_nested_items_to_be_public = false
 
+  # A storage account key is a broad, unscoped credential — anyone who has
+  # it gets full access regardless of Azure RBAC. Disabling it means the
+  # eventual `backend "azurerm" {}` block (versions.tf, currently commented
+  # out) must use `use_azuread_auth = true` instead of an access key when
+  # it's activated.
+  shared_access_key_enabled = false
+
   tags = local.tags
 }
 
@@ -66,7 +73,7 @@ locals {
   # Depends on the Postgres admin password, so Terraform automatically
   # treats this whole value as sensitive too (redacted from plan/apply
   # output the same way the password itself is).
-  postgres_connection_string = "Host=${module.database.fqdn};Port=5432;Username=summaadmin;Password=${var.postgres_admin_password};Database=${module.database.database_name};Ssl Mode=Require"
+  postgres_connection_string = "Host=${module.database.fqdn};Port=5432;Username=summaadmin;Password=${var.postgres_admin_password};Database=${module.database.database_name};Ssl Mode=VerifyFull"
 }
 
 module "container_apps" {
