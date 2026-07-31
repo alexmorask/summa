@@ -1,0 +1,98 @@
+locals {
+  tags = {
+    project = "summa"
+  }
+}
+
+resource "random_id" "suffix" {
+  byte_length = 4
+}
+
+# Used to allowlist this machine's current public IP on the Postgres
+# firewall (see the database module) so migrations can run from here.
+data "http" "my_ip" {
+  url = "https://api.ipify.org"
+}
+
+resource "azurerm_resource_group" "main" {
+  name     = "summa-rg"
+  location = var.location
+
+  tags = local.tags
+}
+
+# --- Remote state backend bootstrap ---
+# Created in this same apply, with local state, since the backend block in
+# versions.tf can't point at a storage account that doesn't exist yet. Once
+# this succeeds, activate that backend block and run
+# `terraform init -migrate-state`.
+resource "azurerm_storage_account" "tfstate" {
+  name                = "summatfstate${random_id.suffix.hex}"
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
+
+  # Defense in depth for a storage account that will hold Terraform state
+  # (which can contain secrets in plaintext, e.g. the Postgres password).
+  allow_nested_items_to_be_public = false
+
+  tags = local.tags
+}
+
+resource "azurerm_storage_container" "tfstate" {
+  name                  = "tfstate"
+  storage_account_id    = azurerm_storage_account.tfstate.id
+  container_access_type = "private"
+}
+
+module "registry" {
+  source = "./modules/registry"
+
+  name                = "summacr${random_id.suffix.hex}"
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+  tags                = local.tags
+}
+
+module "database" {
+  source = "./modules/database"
+
+  name                   = "summa-postgres-${random_id.suffix.hex}"
+  resource_group_name    = azurerm_resource_group.main.name
+  location               = azurerm_resource_group.main.location
+  administrator_login    = "summaadmin"
+  administrator_password = var.postgres_admin_password
+  admin_ip_address       = data.http.my_ip.response_body
+  tags                   = local.tags
+}
+
+resource "azurerm_consumption_budget_resource_group" "main" {
+  name              = "summa-budget"
+  resource_group_id = azurerm_resource_group.main.id
+
+  amount     = var.budget_amount
+  time_grain = "Monthly"
+
+  # Azure only requires this be the first of some month, as a fixed anchor
+  # for the "Monthly" time_grain window — not "when the budget was created."
+  # A static date avoids re-diffing on every apply the way timestamp() would.
+  time_period {
+    start_date = "2026-01-01T00:00:00Z"
+  }
+
+  notification {
+    enabled        = true
+    threshold      = 80
+    operator       = "GreaterThan"
+    contact_emails = [var.budget_alert_email]
+  }
+
+  notification {
+    enabled        = true
+    threshold      = 100
+    operator       = "GreaterThan"
+    contact_emails = [var.budget_alert_email]
+  }
+}
