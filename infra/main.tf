@@ -88,6 +88,14 @@ module "container_apps" {
   tags                  = local.tags
 }
 
+module "github_oidc" {
+  source = "./modules/github-oidc"
+
+  github_repository          = "alexmorask/summa"
+  resource_group_id          = azurerm_resource_group.main.id
+  tfstate_storage_account_id = azurerm_storage_account.tfstate.id
+}
+
 resource "azurerm_consumption_budget_resource_group" "main" {
   name              = "summa-budget"
   resource_group_id = azurerm_resource_group.main.id
@@ -99,7 +107,7 @@ resource "azurerm_consumption_budget_resource_group" "main" {
   # for the "Monthly" time_grain window — not "when the budget was created."
   # A static date avoids re-diffing on every apply the way timestamp() would.
   time_period {
-    start_date = "2026-01-01T00:00:00Z"
+    start_date = "2026-08-01T00:00:00Z"
   }
 
   notification {

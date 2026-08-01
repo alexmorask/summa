@@ -32,3 +32,8 @@ output "api_url" {
   description = "Public URL of the deployed API."
   value       = "https://${module.container_apps.api_fqdn}"
 }
+
+output "github_actions_client_id" {
+  description = "App Registration client ID for the GitHub Actions OIDC identity — set as the production Environment's AZURE_CLIENT_ID variable."
+  value       = module.github_oidc.client_id
+}
