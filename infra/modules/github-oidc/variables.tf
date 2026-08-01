@@ -1,5 +1,5 @@
-variable "github_repository" {
-  description = "GitHub repository allowed to authenticate, as \"owner/repo\"."
+variable "github_repository_id" {
+  description = "GitHub repository allowed to authenticate, in GitHub's immutable OIDC subject format: \"owner@owner_id/repo@repo_id\" — not just \"owner/repo\", since new repos default to immutable subject claims keyed on GitHub's numeric IDs, not names."
   type        = string
 }
 

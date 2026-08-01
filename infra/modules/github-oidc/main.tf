@@ -16,7 +16,7 @@ resource "azuread_application_federated_identity_credential" "github_actions" {
   description    = "CD workflow runs deploying to the production GitHub Environment."
   audiences      = ["api://AzureADTokenExchange"]
   issuer         = "https://token.actions.githubusercontent.com"
-  subject        = "repo:${var.github_repository}:environment:production"
+  subject        = "repo:${var.github_repository_id}:environment:production"
 }
 
 resource "azurerm_role_assignment" "github_actions_contributor" {
