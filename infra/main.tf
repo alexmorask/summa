@@ -4,6 +4,8 @@ locals {
   }
 }
 
+data "azurerm_client_config" "current" {}
+
 resource "random_id" "suffix" {
   byte_length = 4
 }
@@ -48,6 +50,12 @@ resource "azurerm_storage_container" "tfstate" {
   container_access_type = "private"
 }
 
+resource "azurerm_role_assignment" "current_user_tfstate" {
+  scope                = azurerm_storage_account.tfstate.id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = data.azurerm_client_config.current.object_id
+}
+
 module "registry" {
   source = "./modules/registry"
 
@@ -79,13 +87,25 @@ locals {
 module "container_apps" {
   source = "./modules/container-apps"
 
-  resource_group_name   = azurerm_resource_group.main.name
-  location              = azurerm_resource_group.main.location
-  registry_id           = module.registry.id
-  registry_login_server = module.registry.login_server
-  connection_string     = local.postgres_connection_string
-  image_tag             = var.image_tag
-  tags                  = local.tags
+  resource_group_name     = azurerm_resource_group.main.name
+  location                = azurerm_resource_group.main.location
+  registry_id             = module.registry.id
+  registry_login_server   = module.registry.login_server
+  connection_string       = local.postgres_connection_string
+  postgres_host           = module.database.fqdn
+  postgres_admin_login    = "summaadmin"
+  postgres_database       = module.database.database_name
+  postgres_admin_password = var.postgres_admin_password
+  image_tag               = var.image_tag
+  tags                    = local.tags
+}
+
+module "github_oidc" {
+  source = "./modules/github-oidc"
+
+  github_repository          = "alexmorask/summa"
+  resource_group_id          = azurerm_resource_group.main.id
+  tfstate_storage_account_id = azurerm_storage_account.tfstate.id
 }
 
 resource "azurerm_consumption_budget_resource_group" "main" {
@@ -99,7 +119,7 @@ resource "azurerm_consumption_budget_resource_group" "main" {
   # for the "Monthly" time_grain window — not "when the budget was created."
   # A static date avoids re-diffing on every apply the way timestamp() would.
   time_period {
-    start_date = "2026-01-01T00:00:00Z"
+    start_date = "2026-08-01T00:00:00Z"
   }
 
   notification {

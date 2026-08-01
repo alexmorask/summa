@@ -17,6 +17,10 @@ resource "azurerm_postgresql_flexible_server" "main" {
   public_network_access_enabled = true
 
   tags = var.tags
+
+  lifecycle {
+    ignore_changes = [zone]
+  }
 }
 
 resource "azurerm_postgresql_flexible_server_database" "summa" {
@@ -24,16 +28,16 @@ resource "azurerm_postgresql_flexible_server_database" "summa" {
   server_id = azurerm_postgresql_flexible_server.main.id
 }
 
-# The "AllowAzureServices" rule (0.0.0.0/0.0.0.0 — Azure's special-case
-# shorthand for "any Azure-hosted service, any subscription") is
-# deliberately not created here. Adding it now would widen this server's
-# exposed surface for zero benefit, since nothing in Azure needs to reach
-# it until Stage 13's Container Apps exist. Add it as part of that stage,
-# when there's a real consumer.
-
 resource "azurerm_postgresql_flexible_server_firewall_rule" "allow_admin_ip" {
   name             = "AllowAdminIp"
   server_id        = azurerm_postgresql_flexible_server.main.id
   start_ip_address = var.admin_ip_address
   end_ip_address   = var.admin_ip_address
+}
+
+resource "azurerm_postgresql_flexible_server_firewall_rule" "allow_azure_services" {
+  name             = "AllowAzureServices"
+  server_id        = azurerm_postgresql_flexible_server.main.id
+  start_ip_address = "0.0.0.0"
+  end_ip_address   = "0.0.0.0"
 }

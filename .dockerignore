@@ -6,7 +6,6 @@
 .claude/
 tests/
 docs/
-db/
 *.user
 **/appsettings.Development.json
 docker-compose.yml

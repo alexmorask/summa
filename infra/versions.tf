@@ -10,19 +10,25 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.6"
     }
+    azuread = {
+      source  = "hashicorp/azuread"
+      version = "~> 3.9"
+    }
   }
 
-  # Commented out for the bootstrap apply: this backend can't be activated
-  # until the state storage account it points at (created below, in
-  # main.tf) exists, and Terraform 1.15 refuses to plan/apply at all with
-  # an uninitialized non-default backend block present, even with
-  # `init -backend=false`. First apply runs with plain local state; once it
-  # succeeds, uncomment this, run `terraform init -migrate-state` with the
-  # real storage account details (via -backend-config flags or a
-  # backend.hcl file, not committed), and local state moves into it.
-  # backend "azurerm" {}
+  backend "azurerm" {
+    resource_group_name  = "summa-rg"
+    storage_account_name = "summatfstate107ddf3a"
+    container_name       = "tfstate"
+    key                  = "summa.tfstate"
+    use_azuread_auth     = true
+  }
 }
 
 provider "azurerm" {
   features {}
+
+  storage_use_azuread = true
 }
+
+provider "azuread" {}
