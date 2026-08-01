@@ -18,6 +18,20 @@ resource "azurerm_container_app_environment" "main" {
   tags = var.tags
 }
 
+resource "azurerm_user_assigned_identity" "api" {
+  name                = "${var.name_prefix}-api-identity"
+  resource_group_name = var.resource_group_name
+  location            = var.location
+
+  tags = var.tags
+}
+
+resource "azurerm_role_assignment" "api_acr_pull" {
+  scope                = var.registry_id
+  role_definition_name = "AcrPull"
+  principal_id         = azurerm_user_assigned_identity.api.principal_id
+}
+
 resource "azurerm_container_app" "api" {
   name                         = "${var.name_prefix}-api"
   resource_group_name          = var.resource_group_name
@@ -25,12 +39,13 @@ resource "azurerm_container_app" "api" {
   revision_mode                = "Single"
 
   identity {
-    type = "SystemAssigned"
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.api.id]
   }
 
   registry {
     server   = var.registry_login_server
-    identity = "system"
+    identity = azurerm_user_assigned_identity.api.id
   }
 
   secret {
@@ -72,6 +87,22 @@ resource "azurerm_container_app" "api" {
   }
 
   tags = var.tags
+
+  depends_on = [azurerm_role_assignment.api_acr_pull]
+}
+
+resource "azurerm_user_assigned_identity" "worker" {
+  name                = "${var.name_prefix}-worker-identity"
+  resource_group_name = var.resource_group_name
+  location            = var.location
+
+  tags = var.tags
+}
+
+resource "azurerm_role_assignment" "worker_acr_pull" {
+  scope                = var.registry_id
+  role_definition_name = "AcrPull"
+  principal_id         = azurerm_user_assigned_identity.worker.principal_id
 }
 
 resource "azurerm_container_app" "worker" {
@@ -81,12 +112,13 @@ resource "azurerm_container_app" "worker" {
   revision_mode                = "Single"
 
   identity {
-    type = "SystemAssigned"
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.worker.id]
   }
 
   registry {
     server   = var.registry_login_server
-    identity = "system"
+    identity = azurerm_user_assigned_identity.worker.id
   }
 
   secret {
@@ -112,16 +144,6 @@ resource "azurerm_container_app" "worker" {
   }
 
   tags = var.tags
-}
 
-resource "azurerm_role_assignment" "api_acr_pull" {
-  scope                = var.registry_id
-  role_definition_name = "AcrPull"
-  principal_id         = azurerm_container_app.api.identity[0].principal_id
-}
-
-resource "azurerm_role_assignment" "worker_acr_pull" {
-  scope                = var.registry_id
-  role_definition_name = "AcrPull"
-  principal_id         = azurerm_container_app.worker.identity[0].principal_id
+  depends_on = [azurerm_role_assignment.worker_acr_pull]
 }
