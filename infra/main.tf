@@ -79,13 +79,17 @@ locals {
 module "container_apps" {
   source = "./modules/container-apps"
 
-  resource_group_name   = azurerm_resource_group.main.name
-  location              = azurerm_resource_group.main.location
-  registry_id           = module.registry.id
-  registry_login_server = module.registry.login_server
-  connection_string     = local.postgres_connection_string
-  image_tag             = var.image_tag
-  tags                  = local.tags
+  resource_group_name     = azurerm_resource_group.main.name
+  location                = azurerm_resource_group.main.location
+  registry_id             = module.registry.id
+  registry_login_server   = module.registry.login_server
+  connection_string       = local.postgres_connection_string
+  postgres_host           = module.database.fqdn
+  postgres_admin_login    = "summaadmin"
+  postgres_database       = module.database.database_name
+  postgres_admin_password = var.postgres_admin_password
+  image_tag               = var.image_tag
+  tags                    = local.tags
 }
 
 module "github_oidc" {

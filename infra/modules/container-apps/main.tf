@@ -147,3 +147,95 @@ resource "azurerm_container_app" "worker" {
 
   depends_on = [azurerm_role_assignment.worker_acr_pull]
 }
+
+resource "azurerm_user_assigned_identity" "migrate" {
+  name                = "${var.name_prefix}-migrate-identity"
+  resource_group_name = var.resource_group_name
+  location            = var.location
+
+  tags = var.tags
+}
+
+resource "azurerm_role_assignment" "migrate_acr_pull" {
+  scope                = var.registry_id
+  role_definition_name = "AcrPull"
+  principal_id         = azurerm_user_assigned_identity.migrate.principal_id
+}
+
+resource "azurerm_container_app_job" "migrate" {
+  name                         = "${var.name_prefix}-migrate"
+  resource_group_name          = var.resource_group_name
+  location                     = var.location
+  container_app_environment_id = azurerm_container_app_environment.main.id
+
+  replica_timeout_in_seconds = 300
+  replica_retry_limit        = 0
+
+  manual_trigger_config {
+    parallelism              = 1
+    replica_completion_count = 1
+  }
+
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.migrate.id]
+  }
+
+  registry {
+    server   = var.registry_login_server
+    identity = azurerm_user_assigned_identity.migrate.id
+  }
+
+  secret {
+    name  = "postgres-password"
+    value = var.postgres_admin_password
+  }
+
+  template {
+    container {
+      name   = "migrate"
+      image  = "${var.registry_login_server}/summa-migrate:${var.image_tag}"
+      cpu    = 0.25
+      memory = "0.5Gi"
+
+      env {
+        name  = "PGHOST"
+        value = var.postgres_host
+      }
+
+      env {
+        name  = "PGPORT"
+        value = "5432"
+      }
+
+      env {
+        name  = "PGUSER"
+        value = var.postgres_admin_login
+      }
+
+      env {
+        name        = "PGPASSWORD"
+        secret_name = "postgres-password"
+      }
+
+      env {
+        name  = "PGDATABASE"
+        value = var.postgres_database
+      }
+
+      env {
+        name  = "PGSSLMODE"
+        value = "verify-full"
+      }
+
+      env {
+        name  = "PGSSLROOTCERT"
+        value = "system"
+      }
+    }
+  }
+
+  tags = var.tags
+
+  depends_on = [azurerm_role_assignment.migrate_acr_pull]
+}

@@ -30,6 +30,27 @@ variable "connection_string" {
   sensitive   = true
 }
 
+variable "postgres_host" {
+  description = "Postgres server FQDN, for the migration job's PGHOST."
+  type        = string
+}
+
+variable "postgres_admin_login" {
+  description = "Postgres admin login, for the migration job's PGUSER."
+  type        = string
+}
+
+variable "postgres_database" {
+  description = "Postgres database name, for the migration job's PGDATABASE."
+  type        = string
+}
+
+variable "postgres_admin_password" {
+  description = "Postgres admin password, for the migration job's PGPASSWORD."
+  type        = string
+  sensitive   = true
+}
+
 variable "image_tag" {
   description = "Tag to pull for both the API and worker images."
   type        = string

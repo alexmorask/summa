@@ -3,7 +3,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MIGRATIONS_DIR="$SCRIPT_DIR/migrations"
-PSQL=(docker compose exec -T postgres psql -U summa -d summa)
+
+if [ -n "${PGHOST:-}" ]; then
+    PSQL=(psql)
+else
+    PSQL=(docker compose exec -T postgres psql -U summa -d summa)
+fi
 
 "${PSQL[@]}" -v ON_ERROR_STOP=1 -c "
 CREATE TABLE IF NOT EXISTS schema_migrations (
