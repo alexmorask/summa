@@ -2,9 +2,9 @@ locals {
   tags = {
     project = "summa"
   }
-}
 
-data "azurerm_client_config" "current" {}
+  admin_object_id = "1500807d-dd8f-4cbb-a337-0a06dd01b52c"
+}
 
 resource "random_id" "suffix" {
   byte_length = 4
@@ -53,7 +53,7 @@ resource "azurerm_storage_container" "tfstate" {
 resource "azurerm_role_assignment" "current_user_tfstate" {
   scope                = azurerm_storage_account.tfstate.id
   role_definition_name = "Storage Blob Data Contributor"
-  principal_id         = data.azurerm_client_config.current.object_id
+  principal_id         = local.admin_object_id
 }
 
 module "registry" {
@@ -106,6 +106,7 @@ module "github_oidc" {
   github_repository_id       = "alexmorask@6801050/summa@1315397592"
   resource_group_id          = azurerm_resource_group.main.id
   tfstate_storage_account_id = azurerm_storage_account.tfstate.id
+  admin_object_id            = local.admin_object_id
 }
 
 resource "azurerm_consumption_budget_resource_group" "main" {

@@ -1,13 +1,11 @@
-data "azuread_client_config" "current" {}
-
 resource "azuread_application" "github_actions" {
   display_name = "summa-github-actions"
-  owners       = [data.azuread_client_config.current.object_id]
+  owners       = [var.admin_object_id]
 }
 
 resource "azuread_service_principal" "github_actions" {
   client_id = azuread_application.github_actions.client_id
-  owners    = [data.azuread_client_config.current.object_id]
+  owners    = [var.admin_object_id]
 }
 
 resource "azuread_application_federated_identity_credential" "github_actions" {
