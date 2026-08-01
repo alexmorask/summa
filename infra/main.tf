@@ -4,6 +4,8 @@ locals {
   }
 }
 
+data "azurerm_client_config" "current" {}
+
 resource "random_id" "suffix" {
   byte_length = 4
 }
@@ -46,6 +48,12 @@ resource "azurerm_storage_container" "tfstate" {
   name                  = "tfstate"
   storage_account_id    = azurerm_storage_account.tfstate.id
   container_access_type = "private"
+}
+
+resource "azurerm_role_assignment" "current_user_tfstate" {
+  scope                = azurerm_storage_account.tfstate.id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = data.azurerm_client_config.current.object_id
 }
 
 module "registry" {

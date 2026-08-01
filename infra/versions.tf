@@ -16,7 +16,13 @@ terraform {
     }
   }
 
-  # backend "azurerm" {}
+  backend "azurerm" {
+    resource_group_name  = "summa-rg"
+    storage_account_name = "summatfstate107ddf3a"
+    container_name       = "tfstate"
+    key                  = "summa.tfstate"
+    use_azuread_auth     = true
+  }
 }
 
 provider "azurerm" {
