@@ -48,6 +48,14 @@ jobs:
             --name summa-migrate \
             --resource-group summa-rg \
             --image "$ACR_LOGIN_SERVER/summa-migrate:$GITHUB_SHA" \
+            --env-vars \
+              "PGHOST=$POSTGRES_FQDN" \
+              "PGPORT=5432" \
+              "PGUSER=summaadmin" \
+              "PGPASSWORD=secretref:postgres-password" \
+              "PGDATABASE=summa" \
+              "PGSSLMODE=verify-full" \
+              "PGSSLROOTCERT=system" \
             --query name -o tsv)
           echo "Started execution: $execution"
 
@@ -67,6 +75,8 @@ jobs:
             esac
             sleep 5
           done
+        env:
+          POSTGRES_FQDN: ${{ vars.POSTGRES_FQDN }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
