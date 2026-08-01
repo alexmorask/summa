@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+          cache: true
+
+      - name: Start Postgres
+        run: docker compose up -d --wait postgres
+
+      - name: Apply migrations
+        run: ./db/migrate.sh
+
+      - name: Restore
+        run: dotnet restore Summa.slnx --locked-mode
+
+      - name: Build
+        run: dotnet build Summa.slnx --no-restore --configuration Release
+
+      - name: Test
+        run: dotnet test Summa.slnx --no-build --configuration Release

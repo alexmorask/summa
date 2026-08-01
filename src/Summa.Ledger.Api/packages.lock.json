@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "Falco": {
+        "type": "Direct",
+        "requested": "[5.2.0, )",
+        "resolved": "5.2.0",
+        "contentHash": "pbrvm0Dz6C1ZSseKAKEi7RE2yexYeWGQkf9srWA1lHlJdrgWRXJJfjYGGygTQUJLiU7qKNL6Ar3jdnZlre0EaQ==",
+        "dependencies": {
+          "FSharp.Core": "6.0.0",
+          "Falco.Markup": "1.4.0"
+        }
+      },
+      "FSharp.Core": {
+        "type": "Direct",
+        "requested": "[10.1.302, )",
+        "resolved": "10.1.302",
+        "contentHash": "F0cmRH/cCynJYLgYwKd7ijOBzWXdhZX5E5OgIS/8dIoFlgTfGshI+OmXlwD20QhbZejLTiqPBKOkFrQVoqsa1Q=="
+      },
+      "Npgsql": {
+        "type": "Direct",
+        "requested": "[10.0.3, )",
+        "resolved": "10.0.3",
+        "contentHash": "7nb5YzXuvWWJxB0J8DiyL3we+X4FOctZrt0fIBnucOIaIevFEEwGQVZKtiu9olXdlNAK1eNgqSral6r/jlhI4w=="
+      },
+      "Npgsql.FSharp": {
+        "type": "Direct",
+        "requested": "[8.0.0, )",
+        "resolved": "8.0.0",
+        "contentHash": "X5uZrqnr2jt6Z+5GdJWeW10HGPrlZj/SmVZ8qCasyTZFQ+fobnOloe/7SGBiU8VZ4/+sFjPNX3IOQrqBgwDOWA==",
+        "dependencies": {
+          "FSharp.Core": "9.0.100",
+          "Npgsql": "8.0.6"
+        }
+      },
+      "Falco.Markup": {
+        "type": "Transitive",
+        "resolved": "1.4.0",
+        "contentHash": "gcXh0saQzEfPYCTry9PBRL6wSjOQDuw5CnqLeSLrosSAjURxMKy/ITgvjG6Jr1lDxUYn7BYfq7qCrT00BbR56A==",
+        "dependencies": {
+          "FSharp.Core": "4.5.2"
+        }
+      },
+      "FSharp.SystemTextJson": {
+        "type": "Transitive",
+        "resolved": "1.4.36",
+        "contentHash": "1xLk0SBF1nedD74B77rcArjD2d+DeZwbNI7BVCAyKwIBERo1VoX8Mf4AtX0OV2L3ZeM/XS1b6BuhXCyoh0KBnw==",
+        "dependencies": {
+          "FSharp.Core": "4.7.0"
+        }
+      },
+      "summa.ledger.domain": {
+        "type": "Project",
+        "dependencies": {
+          "FSharp.Core": "[10.1.302, )"
+        }
+      },
+      "summa.ledger.store": {
+        "type": "Project",
+        "dependencies": {
+          "FSharp.Core": "[10.1.302, )",
+          "FSharp.SystemTextJson": "[1.4.36, )",
+          "Npgsql": "[10.0.3, )",
+          "Npgsql.FSharp": "[8.0.0, )",
+          "Summa.Ledger.Domain": "[1.0.0, )"
+        }
+      }
+    }
+  }
+}

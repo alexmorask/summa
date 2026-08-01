@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "FSharp.Core": {
+        "type": "Direct",
+        "requested": "[10.1.302, )",
+        "resolved": "10.1.302",
+        "contentHash": "F0cmRH/cCynJYLgYwKd7ijOBzWXdhZX5E5OgIS/8dIoFlgTfGshI+OmXlwD20QhbZejLTiqPBKOkFrQVoqsa1Q=="
+      }
+    }
+  }
+}

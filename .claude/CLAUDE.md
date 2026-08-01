@@ -84,9 +84,11 @@ if one seems wrong, say so and let the owner decide.
 Through Stage 11 of `docs/build-plan.md` (containerize), plus the Stage 8
 integration-test addendum (`Summa.Ledger.Api.Tests.Integration`) and the
 BackgroundService/IHostedService addendum for the projection worker
-(`docs/decisions.md`, 2026-07-31). Stage 12's Terraform (base infrastructure)
-is written and validated against the live subscription but deliberately not
-yet applied; Stage 13 (Container Apps) is in progress.
+(`docs/decisions.md`, 2026-07-31). Stage 12 (base infrastructure) and Stage 13
+(Container Apps) Terraform are both written and validated against the live
+subscription but deliberately not yet applied, to avoid paying for idle
+infrastructure before Stage 14 is ready. Stage 14a (CI) is implemented and
+verified locally.
 Implementation is underway; update this section as the slice progresses.
 
 - Build: `dotnet build`
