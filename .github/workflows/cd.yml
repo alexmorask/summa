@@ -1,0 +1,98 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: cd-${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+
+    env:
+      ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: ACR login
+        run: az acr login --name "${ACR_LOGIN_SERVER%%.*}"
+
+      - name: Build and push images
+        run: |
+          docker build -t "$ACR_LOGIN_SERVER/summa-api:$GITHUB_SHA" -f src/Summa.Ledger.Api/Dockerfile .
+          docker build -t "$ACR_LOGIN_SERVER/summa-projections:$GITHUB_SHA" -f src/Summa.Ledger.Projections/Dockerfile .
+          docker build -t "$ACR_LOGIN_SERVER/summa-migrate:$GITHUB_SHA" -f db/Dockerfile .
+          docker push "$ACR_LOGIN_SERVER/summa-api:$GITHUB_SHA"
+          docker push "$ACR_LOGIN_SERVER/summa-projections:$GITHUB_SHA"
+          docker push "$ACR_LOGIN_SERVER/summa-migrate:$GITHUB_SHA"
+
+      - name: Run database migrations
+        run: |
+          execution=$(az containerapp job start \
+            --name summa-migrate \
+            --resource-group summa-rg \
+            --image "$ACR_LOGIN_SERVER/summa-migrate:$GITHUB_SHA" \
+            --query name -o tsv)
+          echo "Started execution: $execution"
+
+          while true; do
+            status=$(az containerapp job execution show \
+              --name summa-migrate \
+              --resource-group summa-rg \
+              --job-execution-name "$execution" \
+              --query properties.status -o tsv)
+            echo "Status: $status"
+            case "$status" in
+              Succeeded) break ;;
+              Failed)
+                echo "Migration job failed"
+                exit 1
+                ;;
+            esac
+            sleep 5
+          done
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+
+      - name: Terraform init
+        run: terraform init
+        working-directory: infra
+
+      - name: Terraform plan
+        run: |
+          terraform plan \
+            -var "image_tag=$GITHUB_SHA" \
+            -var "postgres_admin_password=$POSTGRES_ADMIN_PASSWORD" \
+            -var "admin_ip_address=$ADMIN_IP_ADDRESS" \
+            -out=tfplan
+        working-directory: infra
+        env:
+          POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+          ADMIN_IP_ADDRESS: ${{ vars.ADMIN_IP_ADDRESS }}
+
+      - name: Terraform apply
+        run: terraform apply tfplan
+        working-directory: infra
+
+      - name: Smoke test /health
+        run: curl --fail "$(terraform output -raw api_url)/health"
+        working-directory: infra
