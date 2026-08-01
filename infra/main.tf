@@ -103,7 +103,7 @@ module "container_apps" {
 module "github_oidc" {
   source = "./modules/github-oidc"
 
-  github_repository          = "alexmorask/summa"
+  github_repository_id       = "alexmorask@6801050/summa@1315397592"
   resource_group_id          = azurerm_resource_group.main.id
   tfstate_storage_account_id = azurerm_storage_account.tfstate.id
 }
