@@ -12,3 +12,8 @@ variable "tfstate_storage_account_id" {
   description = "Storage account the service principal gets Storage Blob Data Contributor on, for remote Terraform state."
   type        = string
 }
+
+variable "admin_object_id" {
+  description = "Fixed Entra object ID of the human administrator who owns this App Registration and Service Principal — not derived from whoever is currently running Terraform, since that resolves differently for a local human apply vs. a CD service-principal apply and would fight itself every run."
+  type        = string
+}
