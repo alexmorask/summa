@@ -11,9 +11,6 @@ resource "azurerm_postgresql_flexible_server" "main" {
   storage_mb = 32768
   sku_name   = "B_Standard_B1ms"
 
-  # No VNet/delegated subnet in this slice yet, so the API/worker (Stage 13)
-  # and an admin machine both need to reach this over the public endpoint.
-  # Access is still gated by the firewall rules below, not left wide open.
   public_network_access_enabled = true
 
   tags = var.tags
