@@ -4,8 +4,10 @@ open System
 open System.Text.Json
 open Falco
 open Falco.Routing
+open Microsoft.AspNetCore.Authentication.JwtBearer
 open Microsoft.AspNetCore.Builder
 open Microsoft.Extensions.Configuration
+open Microsoft.Extensions.DependencyInjection
 open Npgsql
 open Npgsql.FSharp
 open Summa.Ledger.Domain
@@ -20,6 +22,15 @@ let private toErrorMessage : LedgerError -> string =
 let private errorResponse statusCode message =
     Response.withStatusCode statusCode
     >> Response.ofJsonOptions Serialization.options { Error = message }
+
+let private requireRole (role: string) (handler: HttpHandler) : HttpHandler =
+    fun ctx ->
+        if not ctx.User.Identity.IsAuthenticated then
+            (Response.withStatusCode 401 >> Response.ofEmpty) ctx
+        elif not (ctx.User.IsInRole role) then
+            (Response.withStatusCode 403 >> Response.ofEmpty) ctx
+        else
+            handler ctx
 
 let private postTransaction (store: EventStore) : HttpHandler =
     fun ctx ->
@@ -78,14 +89,22 @@ let main args =
     let dataSource = NpgsqlDataSource.Create(connectionString)
     let store = PostgresEventStore.create dataSource
 
+    builder.Services
+        .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+        .AddJwtBearer(fun options ->
+            options.Authority <- builder.Configuration.["Authentication:Authority"]
+            options.Audience <- builder.Configuration.["Authentication:Audience"])
+    |> ignore
+
     let endpoints =
         [ get "/health" (Response.ofPlainText "OK")
-          post "/transactions" (postTransaction store)
-          mapGet "/accounts/{id}/balance" (fun route -> route.GetString "id") (getAccountBalance dataSource)
-          get "/trial-balance" (getTrialBalance dataSource) ]
+          post "/transactions" (requireRole "Ledger.Write" (postTransaction store))
+          mapGet "/accounts/{id}/balance" (fun route -> route.GetString "id") (fun id -> requireRole "Ledger.Read" (getAccountBalance dataSource id))
+          get "/trial-balance" (requireRole "Ledger.Read" (getTrialBalance dataSource)) ]
 
     let wapp = builder.Build()
     wapp.UseRouting()
+        .Use(fun (app: IApplicationBuilder) -> app.UseAuthentication())
         .UseFalco(endpoints)
         .Run(Response.withStatusCode 404 >> Response.ofPlainText "not found")
     0
