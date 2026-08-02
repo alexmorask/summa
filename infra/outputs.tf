@@ -37,3 +37,14 @@ output "github_actions_client_id" {
   description = "App Registration client ID for the GitHub Actions OIDC identity — set as the production Environment's AZURE_CLIENT_ID variable."
   value       = module.github_oidc.client_id
 }
+
+output "api_auth_test_client_id" {
+  description = "Client ID of the test-client App Registration used for CI and local dev token acquisition against Summa.Ledger.Api."
+  value       = module.api_auth.test_client_id
+}
+
+output "api_auth_test_client_secret" {
+  description = "Client secret of the test-client App Registration used for CI and local dev token acquisition against Summa.Ledger.Api."
+  value       = module.api_auth.test_client_secret
+  sensitive   = true
+}
