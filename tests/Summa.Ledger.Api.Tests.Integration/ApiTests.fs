@@ -3,8 +3,10 @@ module ApiTests
 open System
 open System.Net
 open System.Net.Http
+open System.Net.Http.Headers
 open System.Net.Http.Json
 open System.Text
+open System.Text.Json
 open System.Threading.Tasks
 open Microsoft.AspNetCore.Hosting
 open Microsoft.AspNetCore.Mvc.Testing
@@ -14,11 +16,45 @@ open Summa.Ledger.Api.Program
 open Summa.Ledger.Domain
 open Summa.Ledger.Store
 
+let private requiredEnv (name: string) : string =
+    match Environment.GetEnvironmentVariable name with
+    | null -> failwith $"{name} must be set to run integration tests (see infra/modules/api-auth's test_client)."
+    | value -> value
+
+let private getTestToken () : string =
+    let tenantId = "785523cd-52b4-4167-a4e6-9f116d688c0f"
+    let apiAudience = "e62638d3-642a-4f30-bc78-1d1fdff3634a"
+    let clientId = requiredEnv "TEST_CLIENT_ID"
+    let clientSecret = requiredEnv "TEST_CLIENT_SECRET"
+
+    use tokenClient = new HttpClient()
+    use content =
+        new FormUrlEncodedContent(
+            dict [ "grant_type", "client_credentials"
+                   "client_id", clientId
+                   "client_secret", clientSecret
+                   "scope", $"{apiAudience}/.default" ]
+        )
+
+    let response =
+        tokenClient.PostAsync($"https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token", content)
+        |> Async.AwaitTask
+        |> Async.RunSynchronously
+
+    let json =
+        response.Content.ReadAsStringAsync()
+        |> Async.AwaitTask
+        |> Async.RunSynchronously
+
+    use doc = JsonDocument.Parse(json)
+    doc.RootElement.GetProperty("access_token").GetString()
+
 let private factory =
     (new WebApplicationFactory<Program>())
         .WithWebHostBuilder(fun builder -> builder.UseEnvironment("Development") |> ignore)
 
 let private client = factory.CreateClient()
+client.DefaultRequestHeaders.Authorization <- AuthenticationHeaderValue("Bearer", getTestToken ())
 
 let private entry account direction amount : Entry =
     { Account = AccountId account; Direction = direction; Amount = amount }

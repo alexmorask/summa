@@ -78,6 +78,16 @@ resource "azurerm_container_app" "api" {
         secret_name = "connection-string"
       }
 
+      env {
+        name  = "Authentication__Authority"
+        value = var.auth_authority
+      }
+
+      env {
+        name  = "Authentication__Audience"
+        value = var.auth_audience
+      }
+
       liveness_probe {
         transport = "HTTP"
         path      = "/health"
