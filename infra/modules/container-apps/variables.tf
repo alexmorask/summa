@@ -57,6 +57,16 @@ variable "image_tag" {
   default     = "latest"
 }
 
+variable "auth_authority" {
+  description = "OIDC authority URL for JWT Bearer validation on the api container, e.g. https://login.microsoftonline.com/{tenant}/v2.0."
+  type        = string
+}
+
+variable "auth_audience" {
+  description = "Expected JWT audience for the api container — the API's own App Registration identifier URI."
+  type        = string
+}
+
 variable "tags" {
   description = "Tags applied to every resource in this module."
   type        = map(string)

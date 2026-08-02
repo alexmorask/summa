@@ -38,3 +38,6 @@ jobs:
 
       - name: Test
         run: dotnet test Summa.slnx --no-build --configuration Release
+        env:
+          TEST_CLIENT_ID: ${{ secrets.TEST_CLIENT_ID }}
+          TEST_CLIENT_SECRET: ${{ secrets.TEST_CLIENT_SECRET }}

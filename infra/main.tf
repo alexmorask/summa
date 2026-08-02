@@ -4,6 +4,7 @@ locals {
   }
 
   admin_object_id = "1500807d-dd8f-4cbb-a337-0a06dd01b52c"
+  tenant_id       = "785523cd-52b4-4167-a4e6-9f116d688c0f"
 }
 
 resource "random_id" "suffix" {
@@ -81,6 +82,8 @@ module "container_apps" {
   postgres_database       = module.database.database_name
   postgres_admin_password = var.postgres_admin_password
   image_tag               = var.image_tag
+  auth_authority          = "https://login.microsoftonline.com/${local.tenant_id}/v2.0"
+  auth_audience           = module.api_auth.api_client_id
   tags                    = local.tags
 }
 
@@ -91,6 +94,12 @@ module "github_oidc" {
   resource_group_id          = azurerm_resource_group.main.id
   tfstate_storage_account_id = azurerm_storage_account.tfstate.id
   admin_object_id            = local.admin_object_id
+}
+
+module "api_auth" {
+  source = "./modules/api-auth"
+
+  admin_object_id = local.admin_object_id
 }
 
 resource "azurerm_consumption_budget_resource_group" "main" {
