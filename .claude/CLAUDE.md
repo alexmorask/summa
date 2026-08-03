@@ -81,18 +81,20 @@ if one seems wrong, say so and let the owner decide.
 
 ## Status
 
-Through Stage 11 of `docs/build-plan.md` (containerize), plus the Stage 8
-integration-test addendum (`Summa.Ledger.Api.Tests.Integration`) and the
-BackgroundService/IHostedService addendum for the projection worker
-(`docs/decisions.md`, 2026-07-31). Stage 12 (base infrastructure) and Stage 13
-(Container Apps) Terraform are both written and validated against the live
-subscription but deliberately not yet applied, to avoid paying for idle
-infrastructure before Stage 14 is ready. Stage 14a (CI) is implemented and
-verified locally.
+Through Stage 14b of `docs/build-plan.md`, plus the Stage 8 integration-test
+addendum (`Summa.Ledger.Api.Tests.Integration`) and the BackgroundService/
+IHostedService addendum for the projection worker (`docs/decisions.md`,
+2026-07-31). Stages 12–14b are applied and live on Azure: a merge to `main`
+builds and pushes images, runs database migrations, and deploys via
+`terraform apply`, ending with a smoke test against the real deployed API.
+`Summa.Ledger.Api` now requires Entra ID authentication (JWT Bearer, App
+Roles) on every route except `/health` — see `docs/decisions.md` for the
+identity model.
 Implementation is underway; update this section as the slice progresses.
 
 - Build: `dotnet build`
-- Test: `dotnet test`
+- Test: `TEST_CLIENT_ID=... TEST_CLIENT_SECRET=... dotnet test` (values from
+  `infra`'s `api_auth_test_client_id`/`api_auth_test_client_secret` outputs)
 - Local Postgres: `docker compose up -d`
 - Apply migrations: `./db/migrate.sh`
 - Run the API: `dotnet run --project src/Summa.Ledger.Api`
