@@ -89,3 +89,12 @@ fitting, for a project about immutable records._
 - Per-customer account dimensions and as-of-date queries (deferred from the
   first slice).
 - Frontend scope per phase.
+- **Durable, retrievable secret storage (Azure Key Vault)** for the Postgres
+  admin password — distinct from the 2026-07-31 Key Vault rejection (that was
+  about removing the password from Terraform state, which Key Vault alone
+  doesn't do). The real gap: the password was typed into `TF_VAR_` once for
+  the original `apply` and is now unrecoverable by anyone. Likely shape:
+  `random_password` generates it, written into a Key Vault secret, so it's
+  retrievable going forward — but applying that would likely rotate the live
+  credential, so it needs its own session and explicit go-ahead, not a
+  bundled fix.
