@@ -17,3 +17,8 @@ variable "admin_object_id" {
   description = "Fixed Entra object ID of the human administrator who owns this App Registration and Service Principal — not derived from whoever is currently running Terraform, since that resolves differently for a local human apply vs. a CD service-principal apply and would fight itself every run."
   type        = string
 }
+
+variable "registry_id" {
+  description = "Container Registry resource ID, for the role-assignment-management grant scoped to it."
+  type        = string
+}
