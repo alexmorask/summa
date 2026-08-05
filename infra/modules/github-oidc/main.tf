@@ -42,9 +42,25 @@ resource "azurerm_role_assignment" "github_actions_acr_role_admin" {
 
   condition_version = "2.0"
   condition         = <<-EOT
-    ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals{7f951dda-4ed3-4680-a7ca-43fe172d538d}))
+    (
+      (!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'}))
+      OR
+      (
+        @Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals{7f951dda-4ed3-4680-a7ca-43fe172d538d}
+        AND
+        @Request[Microsoft.Authorization/roleAssignments:PrincipalType] ForAnyOfAnyValues:StringEqualsIgnoreCase{'ServicePrincipal'}
+      )
+    )
     AND
-    ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals{7f951dda-4ed3-4680-a7ca-43fe172d538d}))
+    (
+      (!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'}))
+      OR
+      (
+        @Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals{7f951dda-4ed3-4680-a7ca-43fe172d538d}
+        AND
+        @Resource[Microsoft.Authorization/roleAssignments:PrincipalType] ForAnyOfAnyValues:StringEqualsIgnoreCase{'ServicePrincipal'}
+      )
+    )
   EOT
 }
 
