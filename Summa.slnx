@@ -4,10 +4,16 @@
     <Project Path="src/Summa.Ledger.Store/Summa.Ledger.Store.fsproj" />
     <Project Path="src/Summa.Ledger.Api/Summa.Ledger.Api.fsproj" />
     <Project Path="src/Summa.Ledger.Projections/Summa.Ledger.Projections.fsproj" />
+    <Project Path="src/Summa.Recognition.Domain/Summa.Recognition.Domain.fsproj" />
+    <Project Path="src/Summa.Recognition.Store/Summa.Recognition.Store.fsproj" />
+    <Project Path="src/Summa.Recognition.Job/Summa.Recognition.Job.fsproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Summa.Ledger.Domain.Tests/Summa.Ledger.Domain.Tests.fsproj" />
     <Project Path="tests/Summa.Ledger.Store.Tests/Summa.Ledger.Store.Tests.fsproj" />
     <Project Path="tests/Summa.Ledger.Api.Tests.Integration/Summa.Ledger.Api.Tests.Integration.fsproj" />
+    <Project Path="tests/Summa.Recognition.Domain.Tests/Summa.Recognition.Domain.Tests.fsproj" />
+    <Project Path="tests/Summa.Recognition.Store.Tests/Summa.Recognition.Store.Tests.fsproj" />
+    <Project Path="tests/Summa.Recognition.Job.Tests.Integration/Summa.Recognition.Job.Tests.Integration.fsproj" />
   </Folder>
 </Solution>

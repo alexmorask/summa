@@ -68,8 +68,10 @@ if one seems wrong, say so and let the owner decide.
 ## Conventions
 
 - **Projects are namespaced by bounded context:** `Summa.Ledger.Domain`,
-  `Summa.Ledger.Store`, `Summa.Ledger.Api`, `Summa.Ledger.Projections`. Policy,
-  Rating, and Settlement will follow the same pattern.
+  `Summa.Ledger.Store`, `Summa.Ledger.Api`, `Summa.Ledger.Projections`,
+  `Summa.Recognition.Domain`, `Summa.Recognition.Store`,
+  `Summa.Recognition.Job`. Policy, Rating, and Settlement will follow the
+  same pattern.
 - **F# file order matters** — declaration order within a project is significant;
   keep it deliberate.
 - **Model with types.** Prefer discriminated unions and records that make illegal
@@ -81,7 +83,7 @@ if one seems wrong, say so and let the owner decide.
 
 ## Status
 
-Through Stage 14b of `docs/build-plan.md`, plus the Stage 8 integration-test
+Through Stage 15 of `docs/build-plan.md`, plus the Stage 8 integration-test
 addendum (`Summa.Ledger.Api.Tests.Integration`) and the BackgroundService/
 IHostedService addendum for the projection worker (`docs/decisions.md`,
 2026-07-31). Stages 12–14b are applied and live on Azure: a merge to `main`
@@ -89,7 +91,9 @@ builds and pushes images, runs database migrations, and deploys via
 `terraform apply`, ending with a smoke test against the real deployed API.
 `Summa.Ledger.Api` now requires Entra ID authentication (JWT Bearer, App
 Roles) on every route except `/health` — see `docs/decisions.md` for the
-identity model.
+identity model. Stage 16 (the recognition job, `Summa.Recognition.Job`) is
+written and tested locally against real Postgres, but not yet deployed — its
+Terraform/CD wiring is a separate, still-pending change.
 Implementation is underway; update this section as the slice progresses.
 
 - Build: `dotnet build`
@@ -99,5 +103,6 @@ Implementation is underway; update this section as the slice progresses.
 - Apply migrations: `./db/migrate.sh`
 - Run the API: `dotnet run --project src/Summa.Ledger.Api`
 - Run the projection worker: `dotnet run --project src/Summa.Ledger.Projections`
+- Run the recognition job: `dotnet run --project src/Summa.Recognition.Job`
 - Rebuild the projection: `./db/rebuild.sh` (then restart the worker)
 - Run everything containerized: `docker compose up --build`
