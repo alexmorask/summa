@@ -249,3 +249,66 @@ resource "azurerm_container_app_job" "migrate" {
 
   depends_on = [azurerm_role_assignment.migrate_acr_pull]
 }
+
+resource "azurerm_user_assigned_identity" "recognition" {
+  name                = "${var.name_prefix}-recognition-identity"
+  resource_group_name = var.resource_group_name
+  location            = var.location
+
+  tags = var.tags
+}
+
+resource "azurerm_role_assignment" "recognition_acr_pull" {
+  scope                = var.registry_id
+  role_definition_name = "AcrPull"
+  principal_id         = azurerm_user_assigned_identity.recognition.principal_id
+}
+
+resource "azurerm_container_app_job" "recognition" {
+  name                         = "${var.name_prefix}-recognition"
+  resource_group_name          = var.resource_group_name
+  location                     = var.location
+  container_app_environment_id = azurerm_container_app_environment.main.id
+
+  replica_timeout_in_seconds = 300
+  replica_retry_limit        = 0
+
+  schedule_trigger_config {
+    cron_expression          = "0 6 * * *"
+    parallelism              = 1
+    replica_completion_count = 1
+  }
+
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.recognition.id]
+  }
+
+  registry {
+    server   = var.registry_login_server
+    identity = azurerm_user_assigned_identity.recognition.id
+  }
+
+  secret {
+    name  = "connection-string"
+    value = var.connection_string
+  }
+
+  template {
+    container {
+      name   = "recognition"
+      image  = "${var.registry_login_server}/summa-recognition:${var.image_tag}"
+      cpu    = 0.25
+      memory = "0.5Gi"
+
+      env {
+        name        = "ConnectionStrings__Summa"
+        secret_name = "connection-string"
+      }
+    }
+  }
+
+  tags = var.tags
+
+  depends_on = [azurerm_role_assignment.recognition_acr_pull]
+}

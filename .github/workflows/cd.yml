@@ -38,9 +38,11 @@ jobs:
           docker build -t "$ACR_LOGIN_SERVER/summa-api:$GITHUB_SHA" -f src/Summa.Ledger.Api/Dockerfile .
           docker build -t "$ACR_LOGIN_SERVER/summa-projections:$GITHUB_SHA" -f src/Summa.Ledger.Projections/Dockerfile .
           docker build -t "$ACR_LOGIN_SERVER/summa-migrate:$GITHUB_SHA" -f db/Dockerfile .
+          docker build -t "$ACR_LOGIN_SERVER/summa-recognition:$GITHUB_SHA" -f src/Summa.Recognition.Job/Dockerfile .
           docker push "$ACR_LOGIN_SERVER/summa-api:$GITHUB_SHA"
           docker push "$ACR_LOGIN_SERVER/summa-projections:$GITHUB_SHA"
           docker push "$ACR_LOGIN_SERVER/summa-migrate:$GITHUB_SHA"
+          docker push "$ACR_LOGIN_SERVER/summa-recognition:$GITHUB_SHA"
 
       - name: Run database migrations
         run: |
