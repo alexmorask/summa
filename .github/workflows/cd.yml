@@ -47,7 +47,7 @@ jobs:
       - name: Run database migrations
         run: |
           execution=$(az containerapp job start \
-            --name summa-migrate \
+            --name db-migrate \
             --resource-group summa-rg \
             --image "$ACR_LOGIN_SERVER/summa-migrate:$GITHUB_SHA" \
             --env-vars \
@@ -63,7 +63,7 @@ jobs:
 
           while true; do
             status=$(az containerapp job execution show \
-              --name summa-migrate \
+              --name db-migrate \
               --resource-group summa-rg \
               --job-execution-name "$execution" \
               --query properties.status -o tsv)

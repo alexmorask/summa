@@ -19,7 +19,7 @@ resource "azurerm_container_app_environment" "main" {
 }
 
 resource "azurerm_user_assigned_identity" "api" {
-  name                = "${var.name_prefix}-api-identity"
+  name                = "ledger-api-identity"
   resource_group_name = var.resource_group_name
   location            = var.location
 
@@ -34,7 +34,7 @@ resource "azurerm_role_assignment" "api_acr_pull" {
 }
 
 resource "azurerm_container_app" "api" {
-  name                         = "${var.name_prefix}-api"
+  name                         = "ledger-api"
   resource_group_name          = var.resource_group_name
   container_app_environment_id = azurerm_container_app_environment.main.id
   revision_mode                = "Single"
@@ -103,7 +103,7 @@ resource "azurerm_container_app" "api" {
 }
 
 resource "azurerm_user_assigned_identity" "worker" {
-  name                = "${var.name_prefix}-worker-identity"
+  name                = "ledger-worker-identity"
   resource_group_name = var.resource_group_name
   location            = var.location
 
@@ -118,7 +118,7 @@ resource "azurerm_role_assignment" "worker_acr_pull" {
 }
 
 resource "azurerm_container_app" "worker" {
-  name                         = "${var.name_prefix}-worker"
+  name                         = "ledger-worker"
   resource_group_name          = var.resource_group_name
   container_app_environment_id = azurerm_container_app_environment.main.id
   revision_mode                = "Single"
@@ -161,7 +161,7 @@ resource "azurerm_container_app" "worker" {
 }
 
 resource "azurerm_user_assigned_identity" "migrate" {
-  name                = "${var.name_prefix}-migrate-identity"
+  name                = "db-migrate-identity"
   resource_group_name = var.resource_group_name
   location            = var.location
 
@@ -176,7 +176,7 @@ resource "azurerm_role_assignment" "migrate_acr_pull" {
 }
 
 resource "azurerm_container_app_job" "migrate" {
-  name                         = "${var.name_prefix}-migrate"
+  name                         = "db-migrate"
   resource_group_name          = var.resource_group_name
   location                     = var.location
   container_app_environment_id = azurerm_container_app_environment.main.id
@@ -254,7 +254,7 @@ resource "azurerm_container_app_job" "migrate" {
 }
 
 resource "azurerm_user_assigned_identity" "recognition" {
-  name                = "${var.name_prefix}-recognition-identity"
+  name                = "recognition-job-identity"
   resource_group_name = var.resource_group_name
   location            = var.location
 
@@ -269,7 +269,7 @@ resource "azurerm_role_assignment" "recognition_acr_pull" {
 }
 
 resource "azurerm_container_app_job" "recognition" {
-  name                         = "${var.name_prefix}-recognition"
+  name                         = "recognition-job"
   resource_group_name          = var.resource_group_name
   location                     = var.location
   container_app_environment_id = azurerm_container_app_environment.main.id

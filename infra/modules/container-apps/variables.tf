@@ -62,7 +62,7 @@ variable "image_tag" {
 }
 
 variable "name_prefix" {
-  description = "Prefix for names of resources created by this module."
+  description = "Prefix for the shared Container App Environment and Log Analytics Workspace names."
   type        = string
   default     = "summa"
 }
