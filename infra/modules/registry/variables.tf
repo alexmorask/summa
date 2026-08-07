@@ -1,3 +1,8 @@
+variable "location" {
+  description = "Azure region."
+  type        = string
+}
+
 variable "name" {
   description = "Globally-unique Container Registry name (alphanumeric only, no hyphens)."
   type        = string
@@ -5,11 +10,6 @@ variable "name" {
 
 variable "resource_group_name" {
   description = "Resource group to create the registry in."
-  type        = string
-}
-
-variable "location" {
-  description = "Azure region."
   type        = string
 }
 

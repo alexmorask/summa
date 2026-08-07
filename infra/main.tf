@@ -107,6 +107,12 @@ locals {
   postgres_connection_string = "Host=${module.database.fqdn};Port=5432;Username=summaadmin;Password=${random_password.postgres_admin.result};Database=${module.database.database_name};Ssl Mode=VerifyFull"
 }
 
+module "api_auth" {
+  source = "./modules/api-auth"
+
+  admin_object_id = local.admin_object_id
+}
+
 module "container_apps" {
   source = "./modules/container-apps"
 
@@ -133,12 +139,6 @@ module "github_oidc" {
   tfstate_storage_account_id = azurerm_storage_account.tfstate.id
   admin_object_id            = local.admin_object_id
   registry_id                = module.registry.id
-}
-
-module "api_auth" {
-  source = "./modules/api-auth"
-
-  admin_object_id = local.admin_object_id
 }
 
 resource "azurerm_consumption_budget_resource_group" "main" {
