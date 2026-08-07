@@ -44,6 +44,44 @@ resource "azurerm_role_assignment" "current_user_tfstate" {
   principal_id         = local.admin_object_id
 }
 
+resource "random_password" "postgres_admin" {
+  length           = 32
+  override_special = "!#$%&*()-_+[]{}<>?"
+  min_upper        = 1
+  min_lower        = 1
+  min_numeric      = 1
+  min_special      = 1
+}
+
+resource "azurerm_key_vault" "main" {
+  name                = "summa-kv-${random_id.suffix.hex}"
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+  tenant_id           = local.tenant_id
+  sku_name            = "standard"
+
+  rbac_authorization_enabled = true
+  purge_protection_enabled   = true
+
+  tags = local.tags
+}
+
+resource "azurerm_role_assignment" "current_user_kv_secrets_officer" {
+  scope                = azurerm_key_vault.main.id
+  role_definition_name = "Key Vault Secrets Officer"
+  principal_id         = local.admin_object_id
+}
+
+resource "azurerm_key_vault_secret" "postgres_admin_password" {
+  name         = "postgres-admin-password"
+  value        = random_password.postgres_admin.result
+  key_vault_id = azurerm_key_vault.main.id
+
+  depends_on = [azurerm_role_assignment.current_user_kv_secrets_officer]
+
+  tags = local.tags
+}
+
 module "registry" {
   source = "./modules/registry"
 
@@ -60,13 +98,19 @@ module "database" {
   resource_group_name    = azurerm_resource_group.main.name
   location               = azurerm_resource_group.main.location
   administrator_login    = "summaadmin"
-  administrator_password = var.postgres_admin_password
+  administrator_password = random_password.postgres_admin.result
   admin_ip_address       = var.admin_ip_address
   tags                   = local.tags
 }
 
 locals {
-  postgres_connection_string = "Host=${module.database.fqdn};Port=5432;Username=summaadmin;Password=${var.postgres_admin_password};Database=${module.database.database_name};Ssl Mode=VerifyFull"
+  postgres_connection_string = "Host=${module.database.fqdn};Port=5432;Username=summaadmin;Password=${random_password.postgres_admin.result};Database=${module.database.database_name};Ssl Mode=VerifyFull"
+}
+
+module "api_auth" {
+  source = "./modules/api-auth"
+
+  admin_object_id = local.admin_object_id
 }
 
 module "container_apps" {
@@ -80,7 +124,7 @@ module "container_apps" {
   postgres_host           = module.database.fqdn
   postgres_admin_login    = "summaadmin"
   postgres_database       = module.database.database_name
-  postgres_admin_password = var.postgres_admin_password
+  postgres_admin_password = random_password.postgres_admin.result
   image_tag               = var.image_tag
   auth_authority          = "https://login.microsoftonline.com/${local.tenant_id}/v2.0"
   auth_audience           = module.api_auth.api_client_id
@@ -95,12 +139,6 @@ module "github_oidc" {
   tfstate_storage_account_id = azurerm_storage_account.tfstate.id
   admin_object_id            = local.admin_object_id
   registry_id                = module.registry.id
-}
-
-module "api_auth" {
-  source = "./modules/api-auth"
-
-  admin_object_id = local.admin_object_id
 }
 
 resource "azurerm_consumption_budget_resource_group" "main" {

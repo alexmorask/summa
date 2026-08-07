@@ -18,35 +18,35 @@ resource "azurerm_container_app_environment" "main" {
   tags = var.tags
 }
 
-resource "azurerm_user_assigned_identity" "api" {
-  name                = "${var.name_prefix}-api-identity"
+resource "azurerm_user_assigned_identity" "ledger_api" {
+  name                = "ledger-api-identity"
   resource_group_name = var.resource_group_name
   location            = var.location
 
   tags = var.tags
 }
 
-resource "azurerm_role_assignment" "api_acr_pull" {
+resource "azurerm_role_assignment" "ledger_api_acr_pull" {
   scope                = var.registry_id
   role_definition_name = "AcrPull"
-  principal_id         = azurerm_user_assigned_identity.api.principal_id
+  principal_id         = azurerm_user_assigned_identity.ledger_api.principal_id
   principal_type       = "ServicePrincipal"
 }
 
-resource "azurerm_container_app" "api" {
-  name                         = "${var.name_prefix}-api"
+resource "azurerm_container_app" "ledger_api" {
+  name                         = "ledger-api"
   resource_group_name          = var.resource_group_name
   container_app_environment_id = azurerm_container_app_environment.main.id
   revision_mode                = "Single"
 
   identity {
     type         = "UserAssigned"
-    identity_ids = [azurerm_user_assigned_identity.api.id]
+    identity_ids = [azurerm_user_assigned_identity.ledger_api.id]
   }
 
   registry {
     server   = var.registry_login_server
-    identity = azurerm_user_assigned_identity.api.id
+    identity = azurerm_user_assigned_identity.ledger_api.id
   }
 
   secret {
@@ -69,8 +69,8 @@ resource "azurerm_container_app" "api" {
     max_replicas = 1
 
     container {
-      name   = "api"
-      image  = "${var.registry_login_server}/summa-api:${var.image_tag}"
+      name   = "ledger-api"
+      image  = "${var.registry_login_server}/ledger-api:${var.image_tag}"
       cpu    = 0.25
       memory = "0.5Gi"
 
@@ -99,38 +99,38 @@ resource "azurerm_container_app" "api" {
 
   tags = var.tags
 
-  depends_on = [azurerm_role_assignment.api_acr_pull]
+  depends_on = [azurerm_role_assignment.ledger_api_acr_pull]
 }
 
-resource "azurerm_user_assigned_identity" "worker" {
-  name                = "${var.name_prefix}-worker-identity"
+resource "azurerm_user_assigned_identity" "ledger_projections" {
+  name                = "ledger-projections-identity"
   resource_group_name = var.resource_group_name
   location            = var.location
 
   tags = var.tags
 }
 
-resource "azurerm_role_assignment" "worker_acr_pull" {
+resource "azurerm_role_assignment" "ledger_projections_acr_pull" {
   scope                = var.registry_id
   role_definition_name = "AcrPull"
-  principal_id         = azurerm_user_assigned_identity.worker.principal_id
+  principal_id         = azurerm_user_assigned_identity.ledger_projections.principal_id
   principal_type       = "ServicePrincipal"
 }
 
-resource "azurerm_container_app" "worker" {
-  name                         = "${var.name_prefix}-worker"
+resource "azurerm_container_app" "ledger_projections" {
+  name                         = "ledger-projections"
   resource_group_name          = var.resource_group_name
   container_app_environment_id = azurerm_container_app_environment.main.id
   revision_mode                = "Single"
 
   identity {
     type         = "UserAssigned"
-    identity_ids = [azurerm_user_assigned_identity.worker.id]
+    identity_ids = [azurerm_user_assigned_identity.ledger_projections.id]
   }
 
   registry {
     server   = var.registry_login_server
-    identity = azurerm_user_assigned_identity.worker.id
+    identity = azurerm_user_assigned_identity.ledger_projections.id
   }
 
   secret {
@@ -143,8 +143,8 @@ resource "azurerm_container_app" "worker" {
     max_replicas = 1
 
     container {
-      name   = "worker"
-      image  = "${var.registry_login_server}/summa-projections:${var.image_tag}"
+      name   = "ledger-projections"
+      image  = "${var.registry_login_server}/ledger-projections:${var.image_tag}"
       cpu    = 0.25
       memory = "0.5Gi"
 
@@ -157,26 +157,26 @@ resource "azurerm_container_app" "worker" {
 
   tags = var.tags
 
-  depends_on = [azurerm_role_assignment.worker_acr_pull]
+  depends_on = [azurerm_role_assignment.ledger_projections_acr_pull]
 }
 
-resource "azurerm_user_assigned_identity" "migrate" {
-  name                = "${var.name_prefix}-migrate-identity"
+resource "azurerm_user_assigned_identity" "db_migrate" {
+  name                = "db-migrate-identity"
   resource_group_name = var.resource_group_name
   location            = var.location
 
   tags = var.tags
 }
 
-resource "azurerm_role_assignment" "migrate_acr_pull" {
+resource "azurerm_role_assignment" "db_migrate_acr_pull" {
   scope                = var.registry_id
   role_definition_name = "AcrPull"
-  principal_id         = azurerm_user_assigned_identity.migrate.principal_id
+  principal_id         = azurerm_user_assigned_identity.db_migrate.principal_id
   principal_type       = "ServicePrincipal"
 }
 
-resource "azurerm_container_app_job" "migrate" {
-  name                         = "${var.name_prefix}-migrate"
+resource "azurerm_container_app_job" "db_migrate" {
+  name                         = "db-migrate"
   resource_group_name          = var.resource_group_name
   location                     = var.location
   container_app_environment_id = azurerm_container_app_environment.main.id
@@ -191,12 +191,12 @@ resource "azurerm_container_app_job" "migrate" {
 
   identity {
     type         = "UserAssigned"
-    identity_ids = [azurerm_user_assigned_identity.migrate.id]
+    identity_ids = [azurerm_user_assigned_identity.db_migrate.id]
   }
 
   registry {
     server   = var.registry_login_server
-    identity = azurerm_user_assigned_identity.migrate.id
+    identity = azurerm_user_assigned_identity.db_migrate.id
   }
 
   secret {
@@ -206,8 +206,8 @@ resource "azurerm_container_app_job" "migrate" {
 
   template {
     container {
-      name   = "migrate"
-      image  = "${var.registry_login_server}/summa-migrate:${var.image_tag}"
+      name   = "db-migrate"
+      image  = "${var.registry_login_server}/db-migrate:${var.image_tag}"
       cpu    = 0.25
       memory = "0.5Gi"
 
@@ -250,26 +250,26 @@ resource "azurerm_container_app_job" "migrate" {
 
   tags = var.tags
 
-  depends_on = [azurerm_role_assignment.migrate_acr_pull]
+  depends_on = [azurerm_role_assignment.db_migrate_acr_pull]
 }
 
-resource "azurerm_user_assigned_identity" "recognition" {
-  name                = "${var.name_prefix}-recognition-identity"
+resource "azurerm_user_assigned_identity" "recognition_job" {
+  name                = "recognition-job-identity"
   resource_group_name = var.resource_group_name
   location            = var.location
 
   tags = var.tags
 }
 
-resource "azurerm_role_assignment" "recognition_acr_pull" {
+resource "azurerm_role_assignment" "recognition_job_acr_pull" {
   scope                = var.registry_id
   role_definition_name = "AcrPull"
-  principal_id         = azurerm_user_assigned_identity.recognition.principal_id
+  principal_id         = azurerm_user_assigned_identity.recognition_job.principal_id
   principal_type       = "ServicePrincipal"
 }
 
-resource "azurerm_container_app_job" "recognition" {
-  name                         = "${var.name_prefix}-recognition"
+resource "azurerm_container_app_job" "recognition_job" {
+  name                         = "recognition-job"
   resource_group_name          = var.resource_group_name
   location                     = var.location
   container_app_environment_id = azurerm_container_app_environment.main.id
@@ -285,12 +285,12 @@ resource "azurerm_container_app_job" "recognition" {
 
   identity {
     type         = "UserAssigned"
-    identity_ids = [azurerm_user_assigned_identity.recognition.id]
+    identity_ids = [azurerm_user_assigned_identity.recognition_job.id]
   }
 
   registry {
     server   = var.registry_login_server
-    identity = azurerm_user_assigned_identity.recognition.id
+    identity = azurerm_user_assigned_identity.recognition_job.id
   }
 
   secret {
@@ -300,8 +300,8 @@ resource "azurerm_container_app_job" "recognition" {
 
   template {
     container {
-      name   = "recognition"
-      image  = "${var.registry_login_server}/summa-recognition:${var.image_tag}"
+      name   = "recognition-job"
+      image  = "${var.registry_login_server}/recognition-job:${var.image_tag}"
       cpu    = 0.25
       memory = "0.5Gi"
 
@@ -314,5 +314,5 @@ resource "azurerm_container_app_job" "recognition" {
 
   tags = var.tags
 
-  depends_on = [azurerm_role_assignment.recognition_acr_pull]
+  depends_on = [azurerm_role_assignment.recognition_job_acr_pull]
 }

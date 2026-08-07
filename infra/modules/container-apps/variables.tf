@@ -1,16 +1,42 @@
-variable "name_prefix" {
-  description = "Prefix for names of resources created by this module."
+variable "auth_audience" {
+  description = "Expected JWT audience for the api container — the API's own App Registration identifier URI."
   type        = string
-  default     = "summa"
 }
 
-variable "resource_group_name" {
-  description = "Resource group to create these resources in."
+variable "auth_authority" {
+  description = "OIDC authority URL for JWT Bearer validation on the api container, e.g. https://login.microsoftonline.com/{tenant}/v2.0."
   type        = string
+}
+
+variable "connection_string" {
+  description = "Postgres connection string, wired into both apps as a Container App secret."
+  type        = string
+  sensitive   = true
 }
 
 variable "location" {
   description = "Azure region."
+  type        = string
+}
+
+variable "postgres_admin_login" {
+  description = "Postgres admin login, for the migration job's PGUSER."
+  type        = string
+}
+
+variable "postgres_admin_password" {
+  description = "Postgres admin password, for the migration job's PGPASSWORD."
+  type        = string
+  sensitive   = true
+}
+
+variable "postgres_database" {
+  description = "Postgres database name, for the migration job's PGDATABASE."
+  type        = string
+}
+
+variable "postgres_host" {
+  description = "Postgres server FQDN, for the migration job's PGHOST."
   type        = string
 }
 
@@ -24,31 +50,9 @@ variable "registry_login_server" {
   type        = string
 }
 
-variable "connection_string" {
-  description = "Postgres connection string, wired into both apps as a Container App secret."
+variable "resource_group_name" {
+  description = "Resource group to create these resources in."
   type        = string
-  sensitive   = true
-}
-
-variable "postgres_host" {
-  description = "Postgres server FQDN, for the migration job's PGHOST."
-  type        = string
-}
-
-variable "postgres_admin_login" {
-  description = "Postgres admin login, for the migration job's PGUSER."
-  type        = string
-}
-
-variable "postgres_database" {
-  description = "Postgres database name, for the migration job's PGDATABASE."
-  type        = string
-}
-
-variable "postgres_admin_password" {
-  description = "Postgres admin password, for the migration job's PGPASSWORD."
-  type        = string
-  sensitive   = true
 }
 
 variable "image_tag" {
@@ -57,14 +61,10 @@ variable "image_tag" {
   default     = "latest"
 }
 
-variable "auth_authority" {
-  description = "OIDC authority URL for JWT Bearer validation on the api container, e.g. https://login.microsoftonline.com/{tenant}/v2.0."
+variable "name_prefix" {
+  description = "Prefix for the shared Container App Environment and Log Analytics Workspace names."
   type        = string
-}
-
-variable "auth_audience" {
-  description = "Expected JWT audience for the api container — the API's own App Registration identifier URI."
-  type        = string
+  default     = "summa"
 }
 
 variable "tags" {

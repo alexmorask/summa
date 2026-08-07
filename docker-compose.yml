@@ -15,7 +15,7 @@ services:
       timeout: 5s
       retries: 5
 
-  api:
+  ledger-api:
     build:
       context: .
       dockerfile: src/Summa.Ledger.Api/Dockerfile
@@ -29,7 +29,7 @@ services:
       postgres:
         condition: service_healthy
 
-  projections:
+  ledger-worker:
     build:
       context: .
       dockerfile: src/Summa.Ledger.Projections/Dockerfile

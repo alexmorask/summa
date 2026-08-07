@@ -35,21 +35,21 @@ jobs:
 
       - name: Build and push images
         run: |
-          docker build -t "$ACR_LOGIN_SERVER/summa-api:$GITHUB_SHA" -f src/Summa.Ledger.Api/Dockerfile .
-          docker build -t "$ACR_LOGIN_SERVER/summa-projections:$GITHUB_SHA" -f src/Summa.Ledger.Projections/Dockerfile .
-          docker build -t "$ACR_LOGIN_SERVER/summa-migrate:$GITHUB_SHA" -f db/Dockerfile .
-          docker build -t "$ACR_LOGIN_SERVER/summa-recognition:$GITHUB_SHA" -f src/Summa.Recognition.Job/Dockerfile .
-          docker push "$ACR_LOGIN_SERVER/summa-api:$GITHUB_SHA"
-          docker push "$ACR_LOGIN_SERVER/summa-projections:$GITHUB_SHA"
-          docker push "$ACR_LOGIN_SERVER/summa-migrate:$GITHUB_SHA"
-          docker push "$ACR_LOGIN_SERVER/summa-recognition:$GITHUB_SHA"
+          docker build -t "$ACR_LOGIN_SERVER/ledger-api:$GITHUB_SHA" -f src/Summa.Ledger.Api/Dockerfile .
+          docker build -t "$ACR_LOGIN_SERVER/ledger-projections:$GITHUB_SHA" -f src/Summa.Ledger.Projections/Dockerfile .
+          docker build -t "$ACR_LOGIN_SERVER/db-migrate:$GITHUB_SHA" -f db/Dockerfile .
+          docker build -t "$ACR_LOGIN_SERVER/recognition-job:$GITHUB_SHA" -f src/Summa.Recognition.Job/Dockerfile .
+          docker push "$ACR_LOGIN_SERVER/ledger-api:$GITHUB_SHA"
+          docker push "$ACR_LOGIN_SERVER/ledger-projections:$GITHUB_SHA"
+          docker push "$ACR_LOGIN_SERVER/db-migrate:$GITHUB_SHA"
+          docker push "$ACR_LOGIN_SERVER/recognition-job:$GITHUB_SHA"
 
       - name: Run database migrations
         run: |
           execution=$(az containerapp job start \
-            --name summa-migrate \
+            --name db-migrate \
             --resource-group summa-rg \
-            --image "$ACR_LOGIN_SERVER/summa-migrate:$GITHUB_SHA" \
+            --image "$ACR_LOGIN_SERVER/db-migrate:$GITHUB_SHA" \
             --env-vars \
               "PGHOST=$POSTGRES_FQDN" \
               "PGPORT=5432" \
@@ -63,7 +63,7 @@ jobs:
 
           while true; do
             status=$(az containerapp job execution show \
-              --name summa-migrate \
+              --name db-migrate \
               --resource-group summa-rg \
               --job-execution-name "$execution" \
               --query properties.status -o tsv)
@@ -93,12 +93,10 @@ jobs:
         run: |
           terraform plan \
             -var "image_tag=$GITHUB_SHA" \
-            -var "postgres_admin_password=$POSTGRES_ADMIN_PASSWORD" \
             -var "admin_ip_address=$ADMIN_IP_ADDRESS" \
             -out=tfplan
         working-directory: infra
         env:
-          POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
           ADMIN_IP_ADDRESS: ${{ vars.ADMIN_IP_ADDRESS }}
 
       - name: Terraform apply
