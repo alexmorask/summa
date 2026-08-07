@@ -98,7 +98,7 @@ Implementation is underway; update this section as the slice progresses.
 
 - Build: `dotnet build`
 - Test: `TEST_CLIENT_ID=... TEST_CLIENT_SECRET=... dotnet test` (values from
-  `infra`'s `api_auth_test_client_id`/`api_auth_test_client_secret` outputs)
+  `infra`'s `ledger_api_test_client_id`/`ledger_api_test_client_secret` outputs)
 - Local Postgres: `docker compose up -d`
 - Apply migrations: `./db/migrate.sh`
 - Run the API: `dotnet run --project src/Summa.Ledger.Api`

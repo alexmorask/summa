@@ -1,5 +1,5 @@
-resource "azuread_application" "api" {
-  display_name = "summa-ledger-api"
+resource "azuread_application" "ledger_api" {
+  display_name = "ledger-api"
   owners       = [var.admin_object_id]
 
   api {
@@ -25,34 +25,34 @@ resource "azuread_application" "api" {
   }
 }
 
-resource "azuread_service_principal" "api" {
-  client_id = azuread_application.api.client_id
+resource "azuread_service_principal" "ledger_api" {
+  client_id = azuread_application.ledger_api.client_id
   owners    = [var.admin_object_id]
 }
 
-resource "azuread_application" "test_client" {
-  display_name = "summa-ledger-api-test-client"
+resource "azuread_application" "ledger_api_test_client" {
+  display_name = "ledger-api-test-client"
   owners       = [var.admin_object_id]
 }
 
-resource "azuread_service_principal" "test_client" {
-  client_id = azuread_application.test_client.client_id
+resource "azuread_service_principal" "ledger_api_test_client" {
+  client_id = azuread_application.ledger_api_test_client.client_id
   owners    = [var.admin_object_id]
 }
 
-resource "azuread_application_password" "test_client" {
-  application_id = azuread_application.test_client.id
+resource "azuread_application_password" "ledger_api_test_client" {
+  application_id = azuread_application.ledger_api_test_client.id
   display_name   = "ci-and-local-dev"
 }
 
-resource "azuread_app_role_assignment" "test_client_read" {
-  app_role_id         = azuread_service_principal.api.app_role_ids["Ledger.Read"]
-  principal_object_id = azuread_service_principal.test_client.object_id
-  resource_object_id  = azuread_service_principal.api.object_id
+resource "azuread_app_role_assignment" "ledger_api_test_client_read" {
+  app_role_id         = azuread_service_principal.ledger_api.app_role_ids["Ledger.Read"]
+  principal_object_id = azuread_service_principal.ledger_api_test_client.object_id
+  resource_object_id  = azuread_service_principal.ledger_api.object_id
 }
 
-resource "azuread_app_role_assignment" "test_client_write" {
-  app_role_id         = azuread_service_principal.api.app_role_ids["Ledger.Write"]
-  principal_object_id = azuread_service_principal.test_client.object_id
-  resource_object_id  = azuread_service_principal.api.object_id
+resource "azuread_app_role_assignment" "ledger_api_test_client_write" {
+  app_role_id         = azuread_service_principal.ledger_api.app_role_ids["Ledger.Write"]
+  principal_object_id = azuread_service_principal.ledger_api_test_client.object_id
+  resource_object_id  = azuread_service_principal.ledger_api.object_id
 }

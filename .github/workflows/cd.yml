@@ -101,5 +101,5 @@ jobs:
         working-directory: infra/compute
 
       - name: Smoke test /health
-        run: curl --fail "$(terraform output -raw api_url)/health"
+        run: curl --fail "$(terraform output -raw ledger_api_url)/health"
         working-directory: infra/compute

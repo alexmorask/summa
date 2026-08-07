@@ -34,6 +34,6 @@ module "container_apps" {
   postgres_admin_password = data.terraform_remote_state.foundation.outputs.postgres_admin_password
   image_tag               = var.image_tag
   auth_authority          = "https://login.microsoftonline.com/${data.terraform_remote_state.foundation.outputs.tenant_id}/v2.0"
-  auth_audience           = data.terraform_remote_state.foundation.outputs.api_auth_client_id
+  auth_audience           = data.terraform_remote_state.foundation.outputs.ledger_api_client_id
   tags                    = { project = "summa" }
 }

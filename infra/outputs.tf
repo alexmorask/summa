@@ -1,15 +1,15 @@
 output "resource_group_name" {
-  description = "Name of the resource group holding all Stage 12 resources."
+  description = "Name of the resource group all Summa infrastructure is deployed into, across every layer."
   value       = azurerm_resource_group.main.name
 }
 
 output "tfstate_storage_account_name" {
-  description = "Storage account holding remote Terraform state, once migrated."
+  description = "Storage account holding remote Terraform state for all three layers."
   value       = azurerm_storage_account.tfstate.name
 }
 
 output "tfstate_container_name" {
-  description = "Blob container holding remote Terraform state, once migrated."
+  description = "Blob container holding remote Terraform state for all three layers."
   value       = azurerm_storage_container.tfstate.name
 }
 
@@ -25,18 +25,18 @@ output "key_vault_name" {
 }
 
 output "acr_login_server" {
-  description = "Container Registry login server, for Stage 11/13 image push/pull."
+  description = "Container Registry login server, for image push/pull."
   value       = module.registry.login_server
 }
 
-output "api_auth_test_client_id" {
+output "ledger_api_test_client_id" {
   description = "Client ID of the test-client App Registration used for CI and local dev token acquisition against Summa.Ledger.Api."
-  value       = module.api_auth.test_client_id
+  value       = module.api_auth.ledger_api_test_client_id
 }
 
-output "api_auth_test_client_secret" {
+output "ledger_api_test_client_secret" {
   description = "Client secret of the test-client App Registration used for CI and local dev token acquisition against Summa.Ledger.Api."
-  value       = module.api_auth.test_client_secret
+  value       = module.api_auth.ledger_api_test_client_secret
   sensitive   = true
 }
 
@@ -60,7 +60,7 @@ output "tenant_id" {
   value       = local.tenant_id
 }
 
-output "api_auth_client_id" {
+output "ledger_api_client_id" {
   description = "Client ID of the API's own App Registration, used as the JWT Bearer audience."
-  value       = module.api_auth.api_client_id
+  value       = module.api_auth.ledger_api_client_id
 }
