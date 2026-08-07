@@ -8,8 +8,9 @@ Terraform.
 > Pacioli's *Summa de Arithmetica* (1494) first codified double-entry
 > bookkeeping. It also just means *the total*.
 
-**Status:** in development. The ledger vertical slice is being built first; see
-[`docs/build-plan.md`](docs/build-plan.md) for what's done and what's next.
+**Status:** the ledger vertical slice — write/read API, projected balances, and
+revenue recognition — is built and deployed on Azure. See
+[`docs/decisions.md`](docs/decisions.md) for what's been decided and why.
 
 ## What this is
 
@@ -77,7 +78,6 @@ retried command cannot double-post.
 | [`docs/decisions.md`](docs/decisions.md) | Dated decision log — what was chosen and why |
 | [`docs/ledger.md`](docs/ledger.md) | Double-entry model, revenue recognition, the Transaction type |
 | [`docs/architecture.md`](docs/architecture.md) | Event store, consistency boundary, write path, infrastructure |
-| [`docs/build-plan.md`](docs/build-plan.md) | Sequenced build stages |
 | [`docs/glossary.md`](docs/glossary.md) | Accounting terms in plain English |
 | `docs/policy.md`, `agreement.md`, `rating.md`, `settlement.md`, `scribe.md` | Outlines for the contexts not yet designed in depth |
 
