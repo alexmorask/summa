@@ -64,6 +64,14 @@ resource "azurerm_role_assignment" "github_actions_acr_role_admin" {
   EOT
 }
 
+resource "azurerm_role_assignment" "github_actions_kv_secrets_user" {
+  scope                            = var.key_vault_id
+  role_definition_name             = "Key Vault Secrets User"
+  principal_id                     = azuread_service_principal.github_actions.object_id
+  principal_type                   = "ServicePrincipal"
+  skip_service_principal_aad_check = true
+}
+
 data "azuread_application_published_app_ids" "well_known" {}
 
 resource "azuread_service_principal" "msgraph" {

@@ -8,6 +8,11 @@ variable "github_repository_id" {
   type        = string
 }
 
+variable "key_vault_id" {
+  description = "Key Vault resource ID, for the read-only secrets grant scoped to it — CD's own terraform plan/apply refreshes this vault's secret directly, since it lives in the same root CD applies."
+  type        = string
+}
+
 variable "registry_id" {
   description = "Container Registry resource ID, for the role-assignment-management grant scoped to it."
   type        = string
