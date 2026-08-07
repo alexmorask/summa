@@ -30,6 +30,7 @@ resource "azurerm_role_assignment" "api_acr_pull" {
   scope                = var.registry_id
   role_definition_name = "AcrPull"
   principal_id         = azurerm_user_assigned_identity.api.principal_id
+  principal_type       = "ServicePrincipal"
 }
 
 resource "azurerm_container_app" "api" {
@@ -113,6 +114,7 @@ resource "azurerm_role_assignment" "worker_acr_pull" {
   scope                = var.registry_id
   role_definition_name = "AcrPull"
   principal_id         = azurerm_user_assigned_identity.worker.principal_id
+  principal_type       = "ServicePrincipal"
 }
 
 resource "azurerm_container_app" "worker" {
@@ -170,6 +172,7 @@ resource "azurerm_role_assignment" "migrate_acr_pull" {
   scope                = var.registry_id
   role_definition_name = "AcrPull"
   principal_id         = azurerm_user_assigned_identity.migrate.principal_id
+  principal_type       = "ServicePrincipal"
 }
 
 resource "azurerm_container_app_job" "migrate" {
@@ -262,6 +265,7 @@ resource "azurerm_role_assignment" "recognition_acr_pull" {
   scope                = var.registry_id
   role_definition_name = "AcrPull"
   principal_id         = azurerm_user_assigned_identity.recognition.principal_id
+  principal_type       = "ServicePrincipal"
 }
 
 resource "azurerm_container_app_job" "recognition" {
