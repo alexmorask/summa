@@ -45,11 +45,7 @@ resource "azurerm_role_assignment" "current_user_tfstate" {
 }
 
 resource "random_password" "postgres_admin" {
-  length = 32
-  # Excludes '=' and ':' beyond the provider's default special-char set —
-  # this value is later embedded in a "Host=...;Password=...;..."
-  # ADO.NET-style connection string, and those two characters would break
-  # its parsing.
+  length           = 32
   override_special = "!#$%&*()-_+[]{}<>?"
   min_upper        = 1
   min_lower        = 1
@@ -64,22 +60,14 @@ resource "azurerm_key_vault" "main" {
   tenant_id           = local.tenant_id
   sku_name            = "standard"
 
-  # RBAC, not legacy access policies — consistent with every other
-  # permission grant in this project.
   rbac_authorization_enabled = true
-
-  # Durability is the entire point of this resource — a vault an operator
-  # could accidentally hard-delete defeats the purpose.
-  purge_protection_enabled = true
+  purge_protection_enabled   = true
 
   tags = local.tags
 }
 
 resource "azurerm_role_assignment" "current_user_kv_secrets_officer" {
-  scope = azurerm_key_vault.main.id
-  # Owner alone does not grant Key Vault data-plane access (confirmed
-  # directly, not assumed) — secrets specifically need this role, narrower
-  # than Key Vault Administrator since keys/certs are never used here.
+  scope                = azurerm_key_vault.main.id
   role_definition_name = "Key Vault Secrets Officer"
   principal_id         = local.admin_object_id
 }
@@ -89,9 +77,6 @@ resource "azurerm_key_vault_secret" "postgres_admin_password" {
   value        = random_password.postgres_admin.result
   key_vault_id = azurerm_key_vault.main.id
 
-  # Not inferable from the reference above alone — without this, Terraform
-  # may attempt the secret write before the role assignment has actually
-  # propagated through Key Vault's RBAC data plane.
   depends_on = [azurerm_role_assignment.current_user_kv_secrets_officer]
 
   tags = local.tags
