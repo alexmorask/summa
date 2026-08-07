@@ -44,6 +44,59 @@ resource "azurerm_role_assignment" "current_user_tfstate" {
   principal_id         = local.admin_object_id
 }
 
+resource "random_password" "postgres_admin" {
+  length = 32
+  # Excludes '=' and ':' beyond the provider's default special-char set —
+  # this value is later embedded in a "Host=...;Password=...;..."
+  # ADO.NET-style connection string, and those two characters would break
+  # its parsing.
+  override_special = "!#$%&*()-_+[]{}<>?"
+  min_upper        = 1
+  min_lower        = 1
+  min_numeric      = 1
+  min_special      = 1
+}
+
+resource "azurerm_key_vault" "main" {
+  name                = "summa-kv-${random_id.suffix.hex}"
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+  tenant_id           = local.tenant_id
+  sku_name            = "standard"
+
+  # RBAC, not legacy access policies — consistent with every other
+  # permission grant in this project.
+  rbac_authorization_enabled = true
+
+  # Durability is the entire point of this resource — a vault an operator
+  # could accidentally hard-delete defeats the purpose.
+  purge_protection_enabled = true
+
+  tags = local.tags
+}
+
+resource "azurerm_role_assignment" "current_user_kv_secrets_officer" {
+  scope = azurerm_key_vault.main.id
+  # Owner alone does not grant Key Vault data-plane access (confirmed
+  # directly, not assumed) — secrets specifically need this role, narrower
+  # than Key Vault Administrator since keys/certs are never used here.
+  role_definition_name = "Key Vault Secrets Officer"
+  principal_id         = local.admin_object_id
+}
+
+resource "azurerm_key_vault_secret" "postgres_admin_password" {
+  name         = "postgres-admin-password"
+  value        = random_password.postgres_admin.result
+  key_vault_id = azurerm_key_vault.main.id
+
+  # Not inferable from the reference above alone — without this, Terraform
+  # may attempt the secret write before the role assignment has actually
+  # propagated through Key Vault's RBAC data plane.
+  depends_on = [azurerm_role_assignment.current_user_kv_secrets_officer]
+
+  tags = local.tags
+}
+
 module "registry" {
   source = "./modules/registry"
 
@@ -60,13 +113,13 @@ module "database" {
   resource_group_name    = azurerm_resource_group.main.name
   location               = azurerm_resource_group.main.location
   administrator_login    = "summaadmin"
-  administrator_password = var.postgres_admin_password
+  administrator_password = random_password.postgres_admin.result
   admin_ip_address       = var.admin_ip_address
   tags                   = local.tags
 }
 
 locals {
-  postgres_connection_string = "Host=${module.database.fqdn};Port=5432;Username=summaadmin;Password=${var.postgres_admin_password};Database=${module.database.database_name};Ssl Mode=VerifyFull"
+  postgres_connection_string = "Host=${module.database.fqdn};Port=5432;Username=summaadmin;Password=${random_password.postgres_admin.result};Database=${module.database.database_name};Ssl Mode=VerifyFull"
 }
 
 module "container_apps" {
@@ -80,7 +133,7 @@ module "container_apps" {
   postgres_host           = module.database.fqdn
   postgres_admin_login    = "summaadmin"
   postgres_database       = module.database.database_name
-  postgres_admin_password = var.postgres_admin_password
+  postgres_admin_password = random_password.postgres_admin.result
   image_tag               = var.image_tag
   auth_authority          = "https://login.microsoftonline.com/${local.tenant_id}/v2.0"
   auth_audience           = module.api_auth.api_client_id

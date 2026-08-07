@@ -93,12 +93,10 @@ jobs:
         run: |
           terraform plan \
             -var "image_tag=$GITHUB_SHA" \
-            -var "postgres_admin_password=$POSTGRES_ADMIN_PASSWORD" \
             -var "admin_ip_address=$ADMIN_IP_ADDRESS" \
             -out=tfplan
         working-directory: infra
         env:
-          POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
           ADMIN_IP_ADDRESS: ${{ vars.ADMIN_IP_ADDRESS }}
 
       - name: Terraform apply

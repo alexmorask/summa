@@ -48,3 +48,14 @@ output "api_auth_test_client_secret" {
   value       = module.api_auth.test_client_secret
   sensitive   = true
 }
+
+output "postgres_admin_password" {
+  description = "Postgres admin password, generated here and stored durably in Key Vault (see key_vault_name) — never typed into a TF_VAR again."
+  value       = random_password.postgres_admin.result
+  sensitive   = true
+}
+
+output "key_vault_name" {
+  description = "Key Vault holding the Postgres admin password, for manual retrieval: az keyvault secret show --vault-name <this> --name postgres-admin-password"
+  value       = azurerm_key_vault.main.name
+}
