@@ -139,6 +139,7 @@ module "github_oidc" {
   tfstate_storage_account_id = azurerm_storage_account.tfstate.id
   admin_object_id            = local.admin_object_id
   registry_id                = module.registry.id
+  key_vault_id               = azurerm_key_vault.main.id
 }
 
 resource "azurerm_consumption_budget_resource_group" "main" {
