@@ -11,20 +11,18 @@ failed. Prefer the smallest change that teaches the concept.
 
 ## Working agreement
 
-1. **One build-plan stage per session.** See `docs/build-plan.md`. Do not start
-   the next stage; finish, explain, stop.
-2. **Explain before writing.** Describe what you intend to add, file by file, and
+1. **Explain before writing.** Describe what you intend to add, file by file, and
    why. Wait for approval before writing code.
-3. **No speculative abstraction.** No interfaces, layers, helpers, config, or
+2. **No speculative abstraction.** No interfaces, layers, helpers, config, or
    generalization "for later." Only what the current stage requires. (The event
    store port is the one deliberate exception — it is a design decision.)
-4. **No unrequested files.** No READMEs, sample data, editor config, or tooling
+3. **No unrequested files.** No READMEs, sample data, editor config, or tooling
    unless the stage asks for it.
-5. **Small diffs.** If a change will exceed ~5 files or a few hundred lines,
+4. **Small diffs.** If a change will exceed ~5 files or a few hundred lines,
    stop and propose a split.
-6. **Explain the unfamiliar.** Any F#, SQL, Terraform, Docker, or GitHub Actions
+5. **Explain the unfamiliar.** Any F#, SQL, Terraform, Docker, or GitHub Actions
    construct that isn't obvious — explain it in chat, not in code comments.
-7. **Update the docs in the same change.** A decision made while coding gets a
+6. **Update the docs in the same change.** A decision made while coding gets a
    row in `docs/decisions.md`; a design change updates the relevant doc.
 
 ## Domain invariants — never violate these
@@ -56,7 +54,6 @@ require breaking one, stop and raise it.
 
 | Doc | Read it when |
 |---|---|
-| `docs/build-plan.md` | Starting any stage — it defines scope and acceptance |
 | `docs/ledger.md` | Touching the domain model, transactions, or recognition |
 | `docs/architecture.md` | Touching persistence, the write path, or infrastructure |
 | `docs/decisions.md` | Wondering why something is the way it is |
@@ -83,18 +80,20 @@ if one seems wrong, say so and let the owner decide.
 
 ## Status
 
-Through Stage 15 of `docs/build-plan.md`, plus the Stage 8 integration-test
-addendum (`Summa.Ledger.Api.Tests.Integration`) and the BackgroundService/
-IHostedService addendum for the projection worker (`docs/decisions.md`,
-2026-07-31). Stages 12–14b are applied and live on Azure: a merge to `main`
-builds and pushes images, runs database migrations, and deploys via
-`terraform apply`, ending with a smoke test against the real deployed API.
-`Summa.Ledger.Api` now requires Entra ID authentication (JWT Bearer, App
-Roles) on every route except `/health` — see `docs/decisions.md` for the
-identity model. Stage 16 (the recognition job, `Summa.Recognition.Job`) is
-written and tested locally against real Postgres, but not yet deployed — its
-Terraform/CD wiring is a separate, still-pending change.
-Implementation is underway; update this section as the slice progresses.
+The ledger vertical slice is complete and live on Azure. `Summa.Ledger.Api`
+(write + read endpoints, with an integration test project,
+`Summa.Ledger.Api.Tests.Integration`), `Summa.Ledger.Projections` (the
+balance read model, running as a `BackgroundService` for clean SIGTERM
+shutdown), and `Summa.Recognition.Job` (the recognition job, scheduled
+daily via a Container App Job) are all deployed. A merge to `main` builds
+and pushes images, runs database migrations, applies `infra/compute` via
+Terraform, and ends with a smoke test against the real deployed API.
+`Summa.Ledger.Api` requires Entra ID authentication (JWT Bearer, App Roles)
+on every route except `/health` — see `docs/decisions.md` for the identity
+model. Infrastructure is split into three independently-applied Terraform
+layers (`infra/` foundation, `infra/data/`, `infra/compute/`) — see
+`docs/decisions.md` for why.
+Update this section as the project evolves.
 
 - Build: `dotnet build`
 - Test: `TEST_CLIENT_ID=... TEST_CLIENT_SECRET=... dotnet test` (values from

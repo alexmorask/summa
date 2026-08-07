@@ -104,7 +104,7 @@ summa/
 ├── README.md                    # portfolio front door
 ├── docs/                        # these design docs, versioned with the code
 │   ├── decisions.md   ledger.md      architecture.md
-│   ├── glossary.md    build-plan.md
+│   ├── glossary.md
 ├── src/
 │   ├── Summa.Ledger.Domain/       # pure F# core
 │   ├── Summa.Ledger.Store/        # Postgres adapter
@@ -127,8 +127,8 @@ decision and the code implementing it move together — and for a portfolio piec
 the visible reasoning (including rejected alternatives and the decision log) is
 worth as much as the code.
 
-**One PR per build-plan stage**, on a short-lived branch (e.g.
-`stage-03-transaction-constructor`). This enforces the small-batch discipline,
+**One PR per unit of work**, on a short-lived branch (e.g.
+`fix-cd-keyvault-read-access`). This enforces the small-batch discipline,
 gives a proper diff view for reviewing agent output, and leaves a public record of
 incremental, well-scoped work. Given the "understand every line" mission, the PR
 *is* the review checkpoint.
