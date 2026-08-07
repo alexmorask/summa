@@ -91,44 +91,10 @@ module "registry" {
   tags                = local.tags
 }
 
-module "database" {
-  source = "./modules/database"
-
-  name                   = "summa-postgres-${random_id.suffix.hex}"
-  resource_group_name    = azurerm_resource_group.main.name
-  location               = azurerm_resource_group.main.location
-  administrator_login    = "summaadmin"
-  administrator_password = random_password.postgres_admin.result
-  admin_ip_address       = var.admin_ip_address
-  tags                   = local.tags
-}
-
-locals {
-  postgres_connection_string = "Host=${module.database.fqdn};Port=5432;Username=summaadmin;Password=${random_password.postgres_admin.result};Database=${module.database.database_name};Ssl Mode=VerifyFull"
-}
-
 module "api_auth" {
   source = "./modules/api-auth"
 
   admin_object_id = local.admin_object_id
-}
-
-module "container_apps" {
-  source = "./modules/container-apps"
-
-  resource_group_name     = azurerm_resource_group.main.name
-  location                = azurerm_resource_group.main.location
-  registry_id             = module.registry.id
-  registry_login_server   = module.registry.login_server
-  connection_string       = local.postgres_connection_string
-  postgres_host           = module.database.fqdn
-  postgres_admin_login    = "summaadmin"
-  postgres_database       = module.database.database_name
-  postgres_admin_password = random_password.postgres_admin.result
-  image_tag               = var.image_tag
-  auth_authority          = "https://login.microsoftonline.com/${local.tenant_id}/v2.0"
-  auth_audience           = module.api_auth.api_client_id
-  tags                    = local.tags
 }
 
 module "github_oidc" {

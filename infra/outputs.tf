@@ -29,16 +29,6 @@ output "acr_login_server" {
   value       = module.registry.login_server
 }
 
-output "postgres_fqdn" {
-  description = "Fully-qualified domain name of the Postgres server."
-  value       = module.database.fqdn
-}
-
-output "postgres_server_name" {
-  description = "Postgres Flexible Server name."
-  value       = module.database.server_name
-}
-
 output "api_auth_test_client_id" {
   description = "Client ID of the test-client App Registration used for CI and local dev token acquisition against Summa.Ledger.Api."
   value       = module.api_auth.test_client_id
@@ -50,12 +40,27 @@ output "api_auth_test_client_secret" {
   sensitive   = true
 }
 
-output "api_url" {
-  description = "Public URL of the deployed API."
-  value       = "https://${module.container_apps.api_fqdn}"
-}
-
 output "github_actions_client_id" {
   description = "App Registration client ID for the GitHub Actions OIDC identity — set as the production Environment's AZURE_CLIENT_ID variable."
   value       = module.github_oidc.client_id
+}
+
+output "location" {
+  description = "Azure region all resources are deployed to."
+  value       = var.location
+}
+
+output "registry_id" {
+  description = "Resource ID of the Container Registry, for AcrPull role assignments in other layers."
+  value       = module.registry.id
+}
+
+output "tenant_id" {
+  description = "Entra ID tenant ID, for JWT Bearer authority configuration in other layers."
+  value       = local.tenant_id
+}
+
+output "api_auth_client_id" {
+  description = "Client ID of the API's own App Registration, used as the JWT Bearer audience."
+  value       = module.api_auth.api_client_id
 }

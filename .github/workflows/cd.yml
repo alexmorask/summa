@@ -87,22 +87,19 @@ jobs:
 
       - name: Terraform init
         run: terraform init
-        working-directory: infra
+        working-directory: infra/compute
 
       - name: Terraform plan
         run: |
           terraform plan \
             -var "image_tag=$GITHUB_SHA" \
-            -var "admin_ip_address=$ADMIN_IP_ADDRESS" \
             -out=tfplan
-        working-directory: infra
-        env:
-          ADMIN_IP_ADDRESS: ${{ vars.ADMIN_IP_ADDRESS }}
+        working-directory: infra/compute
 
       - name: Terraform apply
         run: terraform apply tfplan
-        working-directory: infra
+        working-directory: infra/compute
 
       - name: Smoke test /health
         run: curl --fail "$(terraform output -raw api_url)/health"
-        working-directory: infra
+        working-directory: infra/compute
