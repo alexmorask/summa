@@ -50,6 +50,14 @@ require breaking one, stop and raise it.
 - **Business time ≠ system time.** `OccurredAt` (when it economically happened)
   is distinct from the log's record order and `recorded_at`.
 
+## Agentic pipeline
+
+This repo is also managed through a Linear-backed, 5-role agentic pipeline
+(`.claude/agents/*.md`, `.claude/skills/*/SKILL.md`): `product-manager` →
+`tech-lead` → domain-expert(s) → `software-engineer`/`infrastructure-engineer`
+→ `tech-lead` review. See `docs/decisions.md`'s "Development process" table
+for how and why it was built.
+
 ## Orientation
 
 | Doc | Read it when |
