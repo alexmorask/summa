@@ -1,5 +1,5 @@
 ---
-name: planning-issues
+name: planning-linear-issues
 description: This skill should be used by tech-lead once a Linear Project is feasible and needs to be broken into Issues — for example "break this into issues", "plan the work for this Project", or automatically after assessing-feasibility returns a Feasible verdict. For infra-only work with no product-manager handoff, first invokes drafting-linear-projects to originate the Project. Discovers available writing-*-code skills live and creates exactly one Issue per skill invocation, per the recorded Issue-granularity decision. Always shows the full set of draft Issues and waits for explicit owner go-ahead before writing any of them to Linear.
 ---
 
@@ -14,7 +14,7 @@ Turn a feasible Linear Project into concrete, buildable Issues — one per `writ
 3. Break the Project's scope into discrete units of work, each mapped to exactly one `writing-*-code` skill invocation — the recorded 2026-08-12 Issue-granularity decision (one Issue per skill invocation, not one per Project or one per file).
 4. Draft each Issue: title, description, which `writing-*-code` skill it maps to, and team. Show the complete set of draft Issues together and wait for the owner's explicit go-ahead before calling any Linear write tool.
 5. After approval, create each Issue via `mcp__linear__save_issue` at status `Todo` — Linear's built-in category, matching the pipeline-wide state-machine convention (Todo → In Progress → In Review → Done) even though nothing downstream advances it yet.
-6. Report back the created Issues (titles and links) to the owner. Moving an Issue through `In Progress`/`In Review`/`Done`, and assigning it to a specific engineer agent, is out of scope here — that's `advancing-the-pipeline`/`implementing-a-linear-issue`, not yet built.
+6. Report back the created Issues (titles and links) to the owner. Moving an Issue through `In Progress`/`In Review`/`Done`, and assigning it to a specific engineer agent, is out of scope here — that's `advancing-the-pipeline`/`implementing-linear-issues`, not yet built.
 
 ## Additional resources
 

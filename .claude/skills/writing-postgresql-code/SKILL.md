@@ -11,7 +11,7 @@ Scope note: this skill covers the SQL *content* — schema design, constraints, 
 
 ## Process
 
-1. Read `.claude/CLAUDE.md` in full, and the relevant sections of `docs/architecture.md` (event store & database decisions, write path) and `docs/ledger.md` (chart of accounts, money representation) for the task at hand. Do not start a build-plan stage the owner hasn't explicitly approved.
+1. Read `.claude/CLAUDE.md` in full, and the relevant sections of `docs/architecture.md` (event store & database decisions, write path) and `docs/ledger.md` (chart of accounts, money representation) for the task at hand. Scope is whatever the owner asked for directly, or whatever a Linear Issue handed off via `implementing-linear-issues` specifies — don't expand beyond it.
 
 2. Draft an implementation plan before writing anything — file by file (or query by query), what changes and why. Use Plan Mode (`EnterPlanMode` / `ExitPlanMode`) for explicit approval before anything is written, same discipline as `writing-fsharp-code`.
 
