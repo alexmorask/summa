@@ -10,6 +10,7 @@
     "microsoft-docs@claude-plugins-official": true
   },
   "attribution": {
-    "commit": ""
+    "commit": "",
+    "pr": ""
   }
 }

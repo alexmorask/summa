@@ -1,6 +1,6 @@
 ---
-name: writing-fsharp-code
-description: This skill should be used when the user asks to write, implement, or draft F# code in the Summa repository — for example "implement stage 5", "write the Transaction type", "add the decide function", "draft the event store port", or any request to produce new or modified .fs/.fsi source. Covers drafting an implementation plan, writing idiomatic F#, and explaining unfamiliar constructs afterward, per this repo's working agreement.
+name: writing-fsharp
+description: This skill should be used when the user asks to write, implement, or draft F# code in the Summa repository — for example "write the Transaction type", "add the decide function", "draft the event store port", "implement LIN-123", or any request to produce new or modified .fs/.fsi source. Covers drafting an implementation plan, writing idiomatic F#, and explaining unfamiliar constructs afterward, per this repo's working agreement.
 ---
 
 ## Purpose
@@ -9,7 +9,7 @@ Implement F# code for the Summa ledger idiomatically, while honoring this repo's
 
 ## Process
 
-1. Read `.claude/CLAUDE.md` in full, and the relevant sections of `docs/build-plan.md`, `docs/ledger.md`, `docs/architecture.md`, and `docs/decisions.md` for the task at hand. Do not start a build-plan stage the owner hasn't explicitly approved, and do not start the *next* stage while finishing the current one.
+1. Read `.claude/CLAUDE.md` in full, and the relevant sections of `docs/ledger.md`, `docs/architecture.md`, and `docs/decisions.md` for the task at hand. Scope is whatever the owner asked for directly, or whatever a Linear Issue handed off via `implementing-linear-issues` specifies — don't expand beyond it into adjacent work the owner hasn't asked for.
 
 2. Draft an implementation plan before writing anything — file by file, what changes and why. Use Plan Mode (`EnterPlanMode` / `ExitPlanMode`) so the plan is presented for explicit approval before any file is written; this is not optional politeness, it is the literal working agreement ("Explain before writing... wait for approval before writing code"). Keep the plan to only what the current task needs — no interfaces, layers, or helpers "for later" (the event store port is the one recorded exception in `docs/decisions.md`).
 

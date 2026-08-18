@@ -1,6 +1,6 @@
 # GitHub Actions idiom reference
 
-Condensed, cited reference for writing GitHub Actions / CI-CD workflow YAML in this repository. Prefer a concrete rule over vague advice. This file lives at the `skills/` level (`../references/github-actions-idioms.md` from `writing-github-actions-code`) — there is no `reviewing-github-actions-code` counterpart yet, so it isn't shared the way `postgres-idioms.md`/`fsharp-idioms.md` are. Complements, doesn't duplicate, `writing-terraform-code`'s coverage of the Terraform *content* itself — this file owns the *workflow* wrapping around a `terraform plan`/`apply` step, not the HCL.
+Condensed, cited reference for writing GitHub Actions / CI-CD workflow YAML in this repository. Prefer a concrete rule over vague advice. This file lives at the `skills/` level (`../references/github-actions-idioms.md` from `writing-github-actions-workflows`) — there is no `reviewing-github-actions-workflows` counterpart yet, so it isn't shared the way `postgres-idioms.md`/`fsharp-idioms.md` are. Complements, doesn't duplicate, `writing-terraform`'s coverage of the Terraform *content* itself — this file owns the *workflow* wrapping around a `terraform plan`/`apply` step, not the HCL.
 
 ## ⚠ Read this before writing Stage 14's Azure auth step
 

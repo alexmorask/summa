@@ -1,6 +1,6 @@
 # Terraform (Azure) idiom reference
 
-Condensed, cited reference for writing Terraform in this repository (`infra/`). Prefer a concrete rule over vague advice. This file lives at the `skills/` level, referenced by `writing-terraform-code` as `../references/terraform-idioms.md`. Complements, doesn't duplicate, `writing-docker-code`'s reference — that file owns image content; this file owns the resources that run and configure those images.
+Condensed, cited reference for writing Terraform in this repository (`infra/`). Prefer a concrete rule over vague advice. This file lives at the `skills/` level, referenced by `writing-terraform` as `../references/terraform-idioms.md`. Complements, doesn't duplicate, `writing-dockerfiles`'s reference — that file owns image content; this file owns the resources that run and configure those images.
 
 ## Provider version pinning
 

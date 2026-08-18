@@ -1,6 +1,6 @@
 # F# idiom reference
 
-Condensed, cited reference for writing F# in this repository. Prefer a concrete rule over vague advice. This file lives at the `skills/` level, referenced by `writing-fsharp-code` as `../references/fsharp-idioms.md`.
+Condensed, cited reference for writing F# in this repository. Prefer a concrete rule over vague advice. This file lives at the `skills/` level, referenced by `writing-fsharp` as `../references/fsharp-idioms.md`.
 
 ## Formatting
 
