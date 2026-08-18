@@ -1,6 +1,6 @@
 # PostgreSQL idiom reference
 
-Condensed, cited reference for writing PostgreSQL (schema and query text) in this repository. Prefer a concrete rule over vague advice. This file lives at the `skills/` level, used by `writing-postgresql-code` (`../references/postgres-idioms.md`). Complements, doesn't duplicate, `fsharp-idioms.md`'s "I/O-layer F#" section — that file owns the F#-side calling convention (`task`/`use`/parameterization); this file owns the SQL/Postgres content itself, wherever it lives (a `.sql` file or a string literal inside an `NpgsqlCommand`).
+Condensed, cited reference for writing PostgreSQL (schema and query text) in this repository. Prefer a concrete rule over vague advice. This file lives at the `skills/` level, used by `writing-sql` (`../references/postgres-idioms.md`). Complements, doesn't duplicate, `fsharp-idioms.md`'s "I/O-layer F#" section — that file owns the F#-side calling convention (`task`/`use`/parameterization); this file owns the SQL/Postgres content itself, wherever it lives (a `.sql` file or a string literal inside an `NpgsqlCommand`).
 
 ## ⚠ Read this before writing Stage 6's `Append`
 

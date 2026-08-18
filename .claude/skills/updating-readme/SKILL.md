@@ -19,7 +19,7 @@ Explicitly out of scope: `docs/*.md` (ledger.md, architecture.md, build-plan.md,
 
 4. Distinguish staleness from silence. A future stage not being implemented yet is not a discrepancy — README is allowed to describe target/future state. A claim that is now factually wrong (e.g. a stale "Status" line, or a missing command genuinely needed to build/run/test today) is.
 
-5. For each real discrepancy, propose a minimal, targeted edit — never regenerate a section or file wholesale, and never touch unrelated prose while in there. State what's stale, why, and the specific replacement text, then wait for approval before writing — same discipline as `writing-fsharp-code`/`writing-postgresql-code`.
+5. For each real discrepancy, propose a minimal, targeted edit — never regenerate a section or file wholesale, and never touch unrelated prose while in there. State what's stale, why, and the specific replacement text, then wait for approval before writing — same discipline as `writing-fsharp`/`writing-sql`.
 
 6. If nothing is actually stale, say so plainly and make no edits. Don't invent busywork changes to justify having run.
 

@@ -1,5 +1,5 @@
 ---
-name: writing-github-actions-code
+name: writing-github-actions-workflows
 description: This skill should be used when the user asks to write or draft GitHub Actions / CI-CD workflow code in the Summa repository — for example "write the CI workflow", "add the build-and-test workflow", "write the CD workflow", "wire up the terraform apply step", "add OIDC login to the workflow", or any request producing new or modified files under `.github/workflows/`. Covers drafting a plan, writing idiomatic Actions YAML, and explaining unfamiliar constructs afterward, per this repo's working agreement.
 ---
 
@@ -7,7 +7,7 @@ description: This skill should be used when the user asks to write or draft GitH
 
 Write correct, idiomatic GitHub Actions workflows for the Summa CI/CD pipeline — CI (`ci.yml`: restore/build/test on PR and on push to `main`) and CD (`cd.yml`: build images, push to ACR, `terraform apply`, deploy on push to `main`) — while honoring `.claude/CLAUDE.md`'s working agreement: the owner must understand every line, so this is a plan-then-write, approval-gated process, not a one-shot action.
 
-Scope note: this skill covers `.github/workflows/*.yml` content — triggers, jobs, steps, auth, caching, and how a workflow *calls* `terraform plan`/`apply` or `docker build`. It does not own the Terraform HCL itself (`writing-terraform-code`) or the Dockerfile content (`writing-docker-code`) — draft those together when the task spans both, rather than treating them as sequential, separate tasks.
+Scope note: this skill covers `.github/workflows/*.yml` content — triggers, jobs, steps, auth, caching, and how a workflow *calls* `terraform plan`/`apply` or `docker build`. It does not own the Terraform HCL itself (`writing-terraform`) or the Dockerfile content (`writing-dockerfiles`) — draft those together when the task spans both, rather than treating them as sequential, separate tasks.
 
 ## Process
 
@@ -15,22 +15,24 @@ Scope note: this skill covers `.github/workflows/*.yml` content — triggers, jo
 
 2. Confirm whether the task touches `ci.yml`, `cd.yml`, or both — they stay separate workflow files by design (`docs/decisions.md`, 2026-07-30), not a call to make fresh. A new deploy step belongs in `cd.yml`, gated the same way the existing steps are (push to `main` only).
 
-3. Draft an implementation plan before writing anything — workflow file by workflow file, job by job, what changes and why. Use Plan Mode (`EnterPlanMode` / `ExitPlanMode`) for explicit approval before anything is written, same discipline as `writing-fsharp-code` and `writing-postgresql-code`.
+3. Draft an implementation plan before writing anything — workflow file by workflow file, job by job, what changes and why. Use Plan Mode (`EnterPlanMode` / `ExitPlanMode`) for explicit approval before anything is written, same discipline as `writing-fsharp` and `writing-sql`.
 
 4. Before finalizing the plan, read `../references/github-actions-idioms.md` in full — in particular its callout on OIDC authentication if the task touches Azure login at all. That callout describes the two easiest things to get wrong on the first pass (`permissions: id-token: write`, and no `client-secret` input existing in the OIDC path) — resolve them during planning, not after writing a workflow that silently drifts back to a long-lived credential.
 
-5. Hold these Summa-specific invariants as non-negotiable, overriding generic Actions advice when they conflict:
+5. If the plan needs to verify a marketplace action's current version/behavior, or Azure/Entra OIDC specifics, that `../references/github-actions-idioms.md` doesn't settle, invoke `verifying-current-documentation` before finalizing the plan — this repo's own OIDC incident history (`docs/decisions.md`, 2026-08-01 entries) is exactly the kind of drift this exists to catch earlier.
+
+6. Hold these Summa-specific invariants as non-negotiable, overriding generic Actions advice when they conflict:
    - **Azure auth is OIDC federated credentials via `azure/login`, never `AZURE_CREDENTIALS` or any client-secret blob** — this is a recorded decision (`docs/decisions.md`, 2026-07-30), not a style preference.
    - **CI triggers on `pull_request` and on `push` to `main`; CD triggers on `push` to `main` only** — CI also runs post-merge, so `main` itself is proven green after every merge, not just each PR in isolation. CD must never be reachable from a forked/untrusted PR, since it holds deploy credentials.
    - **`terraform apply` never runs against local/default state in CI** — the remote state backend (`infra/`'s foundation layer) is a hard prerequisite; if it isn't provisioned yet, that's a blocker to raise, not to work around.
    - **Plan before apply, always** — a visible `terraform plan` output precedes any `apply`, even on the unattended CD path; no bare `-auto-approve` with nothing preceding it.
    - **CI must be green on `main` before trusting a CD change** — never modify `cd.yml` while `ci.yml` is red, and never skip CI to unblock a deploy.
 
-6. After the plan is approved, write the workflow YAML (and, where applicable, coordinate with `writing-terraform-code` for the Terraform steps' surrounding HCL, or `writing-docker-code` for the image-build steps' Dockerfiles).
+7. After the plan is approved, write the workflow YAML (and, where applicable, coordinate with `writing-terraform` for the Terraform steps' surrounding HCL, or `writing-dockerfiles` for the image-build steps' Dockerfiles).
 
-7. After writing, explain every non-obvious Actions/YAML construct used, in the chat reply — never in code comments. This is mandatory, not optional polish, same as the other writing-*-code skills' equivalent step.
+8. After writing, explain every non-obvious Actions/YAML construct used, in the chat reply — never in code comments. This is mandatory, not optional polish, same as the other writing-* skills' equivalent step.
 
-8. If planning or writing surfaced a genuinely new decision not already covered by step 5's resolved invariants or step 2's already-decided workflow split — environment/branch-protection scoping, a concurrency-group strategy, anything else not already resolved — invoke `recording-decisions` before considering the task done.
+9. If planning or writing surfaced a genuinely new decision not already covered by step 6's resolved invariants or step 2's already-decided workflow split — environment/branch-protection scoping, a concurrency-group strategy, anything else not already resolved — invoke `recording-decisions` before considering the task done.
 
 ## Additional resources
 
@@ -40,6 +42,7 @@ Scope note: this skill covers `.github/workflows/*.yml` content — triggers, jo
 
 ### Related skills
 
-- **`writing-terraform-code`** — applies simultaneously whenever the CD workflow's `terraform apply` step is being wired up; owns the HCL/module content this skill doesn't duplicate, this skill owns the workflow steps that invoke it (init, plan, apply, state backend config as passed to the workflow).
-- **`writing-docker-code`** — applies simultaneously whenever the CD workflow builds/pushes images; owns the Dockerfile content, this skill owns the `docker build`/`push`-to-ACR steps and their auth.
-- **`recording-decisions`** — invoked from step 8 whenever a new decision surfaces.
+- **`writing-terraform`** — applies simultaneously whenever the CD workflow's `terraform apply` step is being wired up; owns the HCL/module content this skill doesn't duplicate, this skill owns the workflow steps that invoke it (init, plan, apply, state backend config as passed to the workflow).
+- **`writing-dockerfiles`** — applies simultaneously whenever the CD workflow builds/pushes images; owns the Dockerfile content, this skill owns the `docker build`/`push`-to-ACR steps and their auth.
+- **`verifying-current-documentation`** — invoked from step 5 when the idioms reference doesn't settle a marketplace action's current behavior or Azure/Entra OIDC specifics.
+- **`recording-decisions`** — invoked from step 9 whenever a new decision surfaces.

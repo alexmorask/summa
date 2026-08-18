@@ -1,5 +1,5 @@
 ---
-name: writing-fsharp-code
+name: writing-fsharp
 description: This skill should be used when the user asks to write, implement, or draft F# code in the Summa repository — for example "write the Transaction type", "add the decide function", "draft the event store port", "implement LIN-123", or any request to produce new or modified .fs/.fsi source. Covers drafting an implementation plan, writing idiomatic F#, and explaining unfamiliar constructs afterward, per this repo's working agreement.
 ---
 

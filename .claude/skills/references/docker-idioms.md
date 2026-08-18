@@ -1,6 +1,6 @@
 # Docker idiom reference
 
-Condensed, cited reference for writing Dockerfiles and `.dockerignore` in this repository. Prefer a concrete rule over vague advice. This file lives at the `skills/` level, referenced by `writing-docker-code` as `../references/docker-idioms.md`. Complements, doesn't duplicate, `fsharp-idioms.md`'s "I/O-layer F#" section and `docs/architecture.md`'s Compute/hosting section — this file owns the Dockerfile/`.dockerignore` content itself, not the F# inside the image or the Azure Container Apps resources that run it (that's `writing-terraform-code`).
+Condensed, cited reference for writing Dockerfiles and `.dockerignore` in this repository. Prefer a concrete rule over vague advice. This file lives at the `skills/` level, referenced by `writing-dockerfiles` as `../references/docker-idioms.md`. Complements, doesn't duplicate, `fsharp-idioms.md`'s "I/O-layer F#" section and `docs/architecture.md`'s Compute/hosting section — this file owns the Dockerfile/`.dockerignore` content itself, not the F# inside the image or the Azure Container Apps resources that run it (that's `writing-terraform`).
 
 ## Multi-stage structure: SDK to build, runtime to ship
 
