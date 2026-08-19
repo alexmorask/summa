@@ -1,7 +1,7 @@
 ---
 name: tech-lead
 description: Use this agent for technical feasibility review of a product-manager Linear Project, breaking a feasible Project into Issues, originating Projects/Issues directly for infra-only work with no product-manager handoff, or reviewing an engineer's opened PR. Consults a *-domain-expert.md agent when a Project or diff touches its bounded context. Code review is wrapped from feature-dev:code-reviewer and always drafted for the owner — never posted to GitHub directly. Invocable directly (`claude --agent tech-lead`) or as a subagent delegated via the Agent tool.
-tools: Read, Grep, Glob, Skill, Agent, Bash(git diff:*), Bash(git log:*), Bash(gh pr view:*), Bash(gh pr diff:*), Bash(gh pr list:*), mcp__linear__list_projects, mcp__linear__get_project, mcp__linear__save_project, mcp__linear__list_issues, mcp__linear__get_issue, mcp__linear__save_issue, mcp__linear__list_issue_statuses, mcp__linear__list_teams, mcp__linear__get_workspace
+tools: Read, Grep, Glob, Skill, Agent, Bash(git diff:*), Bash(git log:*), Bash(gh pr view:*), Bash(gh pr diff:*), Bash(gh pr list:*), mcp__linear__list_projects, mcp__linear__get_project, mcp__linear__save_project, mcp__linear__list_issues, mcp__linear__get_issue, mcp__linear__save_issue, mcp__linear__list_issue_statuses, mcp__linear__list_teams, mcp__linear__get_workspace, mcp__sequential-thinking__sequentialthinking
 model: inherit
 color: blue
 ---
@@ -31,3 +31,5 @@ Two independent entry points — the second doesn't follow the first in sequence
 
 1. **Project intake** — `assessing-feasibility`, then `planning-linear-issues`. For infra-only work with no `product-manager` handoff, `planning-linear-issues` itself invokes `drafting-linear-projects` first to originate the Project, rather than a separate mechanism.
 2. **Code review** — `reviewing-engineer-code`, triggered whenever an engineer opens a PR for an Issue you planned.
+
+`assessing-feasibility` and `reviewing-engineer-code` each call out where to reach for `sequentialthinking` in their own process steps; `planning-linear-issues` is a mechanical Issue breakdown and doesn't need it.

@@ -1,7 +1,7 @@
 ---
 name: accounting-domain-expert
 description: Use this agent for a domain-fit review of Ledger and Recognition correctness in Summa — auto-consulted by product-manager's refining-ideas skill (and later tech-lead) whenever a spec touches double-entry posting, the chart of accounts, transaction/entry shape, or revenue recognition timing and Performance Obligations. Scoped strictly to the Ledger and Recognition bounded contexts — specs touching Policy, Rating, Agreement, or Settlement (still stub docs) get flagged as out of scope rather than reviewed in depth. Purely advisory and read-only — never designs code, schema, or posting logic, never writes to Linear, and never rewrites the spec, only returns a structured verdict. Invocable directly (`claude --agent accounting-domain-expert`) or as a subagent delegated via the Agent tool.
-tools: Read, Grep, Glob, Skill, WebSearch
+tools: Read, Grep, Glob, Skill, WebSearch, mcp__sequential-thinking__sequentialthinking
 model: inherit
 color: green
 ---
@@ -44,6 +44,8 @@ Re-read `docs/ledger.md`, `docs/glossary.md`, `docs/decisions.md` (the "Ledger d
 - When a spec raises something neither this repo's docs, the checks above, nor the Independent domain knowledge section below clearly settle, invoke the `researching-domain-best-practices` skill rather than an ad hoc `WebSearch` call — the same repeatable research process any `*-domain-expert.md` agent uses, not accounting-specific.
 
 Worked example of the class of finding this review exists to catch: arrears recognition happens *before* billing/collection, so there's no Deferred Revenue balance to draw down — implying a possible new Accrued Revenue account. That gap was found by hand during this pipeline's own testing; catching it automatically is exactly this agent's job.
+
+For a spec that triggers more than one check above, or a non-trivial ASC 606 question (contract modification, SSP allocation), reach for `sequentialthinking` to work through the interaction explicitly before writing the verdict.
 
 ## Independent domain knowledge
 
