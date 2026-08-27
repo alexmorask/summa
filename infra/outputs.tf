@@ -64,3 +64,19 @@ output "ledger_api_client_id" {
   description = "Client ID of the API's own App Registration, used as the JWT Bearer audience."
   value       = module.api_auth.ledger_api_client_id
 }
+
+output "policy_api_test_client_id" {
+  description = "Client ID of the test-client App Registration used for CI and local dev token acquisition against the Policy API."
+  value       = module.policy_auth.policy_api_test_client_id
+}
+
+output "policy_api_test_client_secret" {
+  description = "Client secret of the test-client App Registration used for CI and local dev token acquisition against the Policy API."
+  value       = module.policy_auth.policy_api_test_client_secret
+  sensitive   = true
+}
+
+output "policy_api_client_id" {
+  description = "Client ID of the Policy API's own App Registration, used as the JWT Bearer audience."
+  value       = module.policy_auth.policy_api_client_id
+}
