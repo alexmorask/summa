@@ -17,8 +17,6 @@ let private policyOf pricing =
 let private evaluate pricing quantities =
     Policy.evaluate (policyOf pricing) quantities
 
-// --- create / validation ---
-
 [<Fact>]
 let ``flat and per-unit compose into a valid policy`` () =
     let pricing = Sum [ Flat 1000L; PerUnit(apiCalls, 5L) ]
@@ -47,8 +45,6 @@ let ``zero amount is allowed as a free component`` () =
     match create (Flat 0L) with
     | Ok _ -> ()
     | Error e -> failwith $"expected Ok, got {e}"
-
-// --- evaluate ---
 
 [<Fact>]
 let ``flat evaluates to a single flat charge with no quantities`` () =
@@ -81,10 +77,28 @@ let ``nested Sum itemizes every leaf in order and totals them`` () =
     | Error e -> failwith $"expected Ok, got {e}"
 
 [<Fact>]
+let ``a zero-amount leaf itemizes as a zero charge`` () =
+    let pricing = Sum [ Flat 0L; PerUnit(apiCalls, 5L) ]
+    let quantities = [ { Unit = apiCalls; Amount = 0L } ]
+    match evaluate pricing quantities with
+    | Ok breakdown ->
+        Assert.Equal<LineItem list>(
+            [ FlatCharge 0L; PerUnitCharge(apiCalls, 0L, 5L, 0L) ],
+            breakdown.LineItems
+        )
+        Assert.Equal(0L, breakdown.Total)
+    | Error e -> failwith $"expected Ok, got {e}"
+
+[<Fact>]
 let ``a quantity whose unit doesn't match the leaf is rejected`` () =
     let gb = UnitOfMeasure "gb_storage"
     let quantities = [ { Unit = gb; Amount = 100L } ]
     Assert.Equal(Error(UnitMismatch(apiCalls, gb)), evaluate (PerUnit(apiCalls, 5L)) quantities)
+
+[<Fact>]
+let ``a negative quantity is rejected`` () =
+    let quantities = [ { Unit = apiCalls; Amount = -1L } ]
+    Assert.Equal(Error NegativeQuantity, evaluate (PerUnit(apiCalls, 5L)) quantities)
 
 [<Fact>]
 let ``too few quantities is rejected as a count mismatch`` () =

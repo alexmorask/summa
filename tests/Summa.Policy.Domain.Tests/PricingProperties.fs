@@ -6,20 +6,27 @@ open FsCheck.FSharp
 open FsCheck.Xunit
 open Summa.Policy.Domain
 
-let private amountOf lineItem =
-    match lineItem with
-    | FlatCharge amount -> amount
-    | PerUnitCharge (_, _, _, amount) -> amount
-
 let rec private leafCount comp =
     match comp with
     | Flat _ -> 1
     | PerUnit _ -> 1
     | Sum children -> children |> List.sumBy leafCount
 
-/// A generated policy paired with quantities that match its PerUnit leaves in
-/// order and unit — so evaluation is always expected to succeed and the
-/// invariants under test are the interesting thing left to check.
+let rec private expectedTotal comp (qs: Quantity list) =
+    match comp with
+    | Flat amount -> amount, qs
+    | PerUnit (_, unitPrice) ->
+        match qs with
+        | q :: rest -> unitPrice * q.Amount, rest
+        | [] -> 0L, []
+    | Sum children ->
+        children
+        |> List.fold
+            (fun (running, remaining) child ->
+                let sub, remaining' = expectedTotal child remaining
+                running + sub, remaining')
+            (0L, qs)
+
 type PricingScenario =
     { Policy: Policy
       Quantities: Quantity list }
@@ -29,8 +36,6 @@ let private unitGen =
     |> Gen.elements
     |> Gen.map UnitOfMeasure
 
-/// Bounded so that unitPrice * quantity, and their sums across a tree, stay well
-/// inside int64 range — property tests must not fail on incidental overflow.
 let private amountGen = Gen.choose (0, 1_000_000) |> Gen.map int64
 
 let private flatGen = amountGen |> Gen.map (fun a -> Flat a, [])
@@ -43,8 +48,6 @@ let private perUnitGen =
         return PerUnit(unit, price), [ { Unit = unit; Amount = qty } ]
     }
 
-// componentGen and sumGen are mutually recursive; `size` shrinks on the way down
-// so the tree is always finite.
 let rec private componentGen size =
     if size <= 0 then
         Gen.oneof [ flatGen; perUnitGen ]
@@ -70,9 +73,11 @@ type Generators =
     static member PricingScenario() = Arb.fromGen scenarioGen
 
 [<Property(Arbitrary = [| typeof<Generators> |])>]
-let ``components sum to total`` (scenario: PricingScenario) =
+let ``total equals an independent reference computation of the tree`` (scenario: PricingScenario) =
     match Policy.evaluate scenario.Policy scenario.Quantities with
-    | Ok breakdown -> breakdown.Total = (breakdown.LineItems |> List.sumBy amountOf)
+    | Ok breakdown ->
+        let reference, _ = expectedTotal scenario.Policy.Pricing scenario.Quantities
+        breakdown.Total = reference
     | Error e -> failwith $"expected Ok, got {e}"
 
 [<Property(Arbitrary = [| typeof<Generators> |])>]
