@@ -97,6 +97,12 @@ module "api_auth" {
   admin_object_id = local.admin_object_id
 }
 
+module "policy_auth" {
+  source = "./modules/policy-auth"
+
+  admin_object_id = local.admin_object_id
+}
+
 module "github_oidc" {
   source = "./modules/github-oidc"
 
