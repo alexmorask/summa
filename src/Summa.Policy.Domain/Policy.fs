@@ -38,11 +38,6 @@ type PricingError =
 
 module Policy =
 
-    let private amountOf lineItem =
-        match lineItem with
-        | FlatCharge amount -> amount
-        | PerUnitCharge (_, quantity, unitPrice) -> unitPrice * quantity
-
     let rec private perUnitLeafCount pricing =
         match pricing with
         | Flat _ -> 0
@@ -69,36 +64,35 @@ module Policy =
               Pricing = pricing })
 
     let evaluate (policy: Policy) (usage: Usage list) : Result<Breakdown, PricingError> =
-        let requiredUsageCount = perUnitLeafCount policy.Pricing
-        let suppliedUsageCount = List.length usage
-        let countError = Error(QuantityCountMismatch(requiredUsageCount, suppliedUsageCount))
+        let countError () =
+            Error(QuantityCountMismatch(perUnitLeafCount policy.Pricing, List.length usage))
 
         let rec eval pricing usage =
             match pricing with
-            | Flat amount -> Ok([ FlatCharge amount ], usage)
+            | Flat amount -> Ok([ FlatCharge amount ], amount, usage)
             | PerUnit (unit, unitPrice) ->
                 match usage with
                 | u :: rest when u.Unit = unit ->
                     if u.Amount < 0L then
                         Error NegativeQuantity
                     else
-                        Ok([ PerUnitCharge(unit, u.Amount, unitPrice) ], rest)
+                        Ok([ PerUnitCharge(unit, u.Amount, unitPrice) ], unitPrice * u.Amount, rest)
                 | u :: _ -> Error(UnitMismatch(unit, u.Unit))
-                | [] -> countError
+                | [] -> countError ()
             | Sum children ->
-                children
-                |> List.fold
-                    (fun acc child ->
-                        acc
-                        |> Result.bind (fun (items, remaining) ->
-                            eval child remaining
-                            |> Result.map (fun (childItems, remaining') -> items @ childItems, remaining')))
-                    (Ok([], usage))
+                (Ok([], 0L, usage), children)
+                ||> List.fold (fun acc child ->
+                    acc
+                    |> Result.bind (fun (itemGroups, total, remaining) ->
+                        eval child remaining
+                        |> Result.map (fun (childItems, childTotal, remaining') ->
+                            childItems :: itemGroups, total + childTotal, remaining')))
+                |> Result.map (fun (itemGroups, total, remaining) ->
+                    List.concat (List.rev itemGroups), total, remaining)
 
-        if requiredUsageCount <> suppliedUsageCount then
-            countError
-        else
-            eval policy.Pricing usage
-            |> Result.map (fun (items, _) ->
-                { LineItems = items
-                  Total = items |> List.sumBy amountOf })
+        eval policy.Pricing usage
+        |> Result.bind (fun (items, total, remaining) ->
+            if List.isEmpty remaining then
+                Ok { LineItems = items; Total = total }
+            else
+                countError ())
