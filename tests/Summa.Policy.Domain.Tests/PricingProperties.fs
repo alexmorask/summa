@@ -12,7 +12,7 @@ let rec private leafCount comp =
     | PerUnit _ -> 1
     | Sum children -> children |> List.sumBy leafCount
 
-let rec private expectedTotal comp (qs: Quantity list) =
+let rec private expectedTotal comp (qs: Usage list) =
     match comp with
     | Flat amount -> amount, qs
     | PerUnit (_, unitPrice) ->
@@ -29,7 +29,7 @@ let rec private expectedTotal comp (qs: Quantity list) =
 
 type PricingScenario =
     { Policy: Policy
-      Quantities: Quantity list }
+      Quantities: Usage list }
 
 let private unitGen =
     [ "api_call"; "gb_storage"; "seat"; "message" ]

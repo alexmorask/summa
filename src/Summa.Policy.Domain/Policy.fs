@@ -16,7 +16,7 @@ type Policy =
       IdempotencyKey: string
       Pricing: PricingFormula }
 
-type Quantity =
+type Usage =
     { Unit: UnitOfMeasure
       Amount: int64 }
 
@@ -68,7 +68,7 @@ module Policy =
               IdempotencyKey = idempotencyKey
               Pricing = pricing })
 
-    let evaluate (policy: Policy) (quantities: Quantity list) : Result<Breakdown, PricingError> =
+    let evaluate (policy: Policy) (quantities: Usage list) : Result<Breakdown, PricingError> =
         let expected = perUnitLeafCount policy.Pricing
         let actual = List.length quantities
         let countError = Error(QuantityCountMismatch(expected, actual))
