@@ -34,7 +34,7 @@ type PricingError =
     | NegativeAmount
     | NegativeQuantity
     | UnitMismatch of expected: UnitOfMeasure * actual: UnitOfMeasure
-    | QuantityCountMismatch of expected: int * actual: int
+    | QuantityCountMismatch of required: int * supplied: int
 
 module Policy =
 
@@ -68,22 +68,22 @@ module Policy =
               IdempotencyKey = idempotencyKey
               Pricing = pricing })
 
-    let evaluate (policy: Policy) (quantities: Usage list) : Result<Breakdown, PricingError> =
-        let expected = perUnitLeafCount policy.Pricing
-        let actual = List.length quantities
-        let countError = Error(QuantityCountMismatch(expected, actual))
+    let evaluate (policy: Policy) (usage: Usage list) : Result<Breakdown, PricingError> =
+        let requiredUsageCount = perUnitLeafCount policy.Pricing
+        let suppliedUsageCount = List.length usage
+        let countError = Error(QuantityCountMismatch(requiredUsageCount, suppliedUsageCount))
 
-        let rec eval pricing quantities =
+        let rec eval pricing usage =
             match pricing with
-            | Flat amount -> Ok([ FlatCharge amount ], quantities)
+            | Flat amount -> Ok([ FlatCharge amount ], usage)
             | PerUnit (unit, unitPrice) ->
-                match quantities with
-                | q :: rest when q.Unit = unit ->
-                    if q.Amount < 0L then
+                match usage with
+                | u :: rest when u.Unit = unit ->
+                    if u.Amount < 0L then
                         Error NegativeQuantity
                     else
-                        Ok([ PerUnitCharge(unit, q.Amount, unitPrice, unitPrice * q.Amount) ], rest)
-                | q :: _ -> Error(UnitMismatch(unit, q.Unit))
+                        Ok([ PerUnitCharge(unit, u.Amount, unitPrice, unitPrice * u.Amount) ], rest)
+                | u :: _ -> Error(UnitMismatch(unit, u.Unit))
                 | [] -> countError
             | Sum children ->
                 children
@@ -93,12 +93,12 @@ module Policy =
                         |> Result.bind (fun (items, remaining) ->
                             eval child remaining
                             |> Result.map (fun (childItems, remaining') -> items @ childItems, remaining')))
-                    (Ok([], quantities))
+                    (Ok([], usage))
 
-        if expected <> actual then
+        if requiredUsageCount <> suppliedUsageCount then
             countError
         else
-            eval policy.Pricing quantities
+            eval policy.Pricing usage
             |> Result.map (fun (items, _) ->
                 { LineItems = items
                   Total = items |> List.sumBy amountOf })

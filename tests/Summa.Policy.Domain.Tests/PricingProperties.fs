@@ -12,12 +12,12 @@ let rec private leafCount comp =
     | PerUnit _ -> 1
     | Sum children -> children |> List.sumBy leafCount
 
-let rec private expectedTotal comp (qs: Usage list) =
+let rec private expectedTotal comp (usage: Usage list) =
     match comp with
-    | Flat amount -> amount, qs
+    | Flat amount -> amount, usage
     | PerUnit (_, unitPrice) ->
-        match qs with
-        | q :: rest -> unitPrice * q.Amount, rest
+        match usage with
+        | u :: rest -> unitPrice * u.Amount, rest
         | [] -> 0L, []
     | Sum children ->
         children
@@ -25,11 +25,11 @@ let rec private expectedTotal comp (qs: Usage list) =
             (fun (running, remaining) child ->
                 let sub, remaining' = expectedTotal child remaining
                 running + sub, remaining')
-            (0L, qs)
+            (0L, usage)
 
 type PricingScenario =
     { Policy: Policy
-      Quantities: Usage list }
+      Usage: Usage list }
 
 let private unitGen =
     [ "api_call"; "gb_storage"; "seat"; "message" ]
@@ -44,8 +44,8 @@ let private perUnitGen =
     gen {
         let! unit = unitGen
         let! price = amountGen
-        let! qty = amountGen
-        return PerUnit(unit, price), [ { Unit = unit; Amount = qty } ]
+        let! amount = amountGen
+        return PerUnit(unit, price), [ { Unit = unit; Amount = amount } ]
     }
 
 let rec private componentGen size =
@@ -64,9 +64,9 @@ and private sumGen size =
 let private scenarioGen =
     Gen.sized (fun size ->
         componentGen size
-        |> Gen.map (fun (pricing, quantities) ->
+        |> Gen.map (fun (pricing, usage) ->
             match Policy.create (Guid.NewGuid()) "idempotency" pricing with
-            | Ok policy -> { Policy = policy; Quantities = quantities }
+            | Ok policy -> { Policy = policy; Usage = usage }
             | Error e -> failwith $"generator produced an invalid policy: {e}"))
 
 type Generators =
@@ -74,15 +74,15 @@ type Generators =
 
 [<Property(Arbitrary = [| typeof<Generators> |])>]
 let ``total equals an independent reference computation of the tree`` (scenario: PricingScenario) =
-    match Policy.evaluate scenario.Policy scenario.Quantities with
+    match Policy.evaluate scenario.Policy scenario.Usage with
     | Ok breakdown ->
-        let reference, _ = expectedTotal scenario.Policy.Pricing scenario.Quantities
+        let reference, _ = expectedTotal scenario.Policy.Pricing scenario.Usage
         breakdown.Total = reference
     | Error e -> failwith $"expected Ok, got {e}"
 
 [<Property(Arbitrary = [| typeof<Generators> |])>]
 let ``breakdown has exactly one line item per leaf`` (scenario: PricingScenario) =
-    match Policy.evaluate scenario.Policy scenario.Quantities with
+    match Policy.evaluate scenario.Policy scenario.Usage with
     | Ok breakdown -> List.length breakdown.LineItems = leafCount scenario.Policy.Pricing
     | Error e -> failwith $"expected Ok, got {e}"
 
@@ -93,9 +93,9 @@ let ``Sum preserves each leaf's identity, never collapsing them`` (left: Pricing
         | Ok policy -> policy
         | Error e -> failwith $"invalid combined policy: {e}"
 
-    match Policy.evaluate left.Policy left.Quantities,
-          Policy.evaluate right.Policy right.Quantities,
-          Policy.evaluate combined (left.Quantities @ right.Quantities)
+    match Policy.evaluate left.Policy left.Usage,
+          Policy.evaluate right.Policy right.Usage,
+          Policy.evaluate combined (left.Usage @ right.Usage)
         with
     | Ok l, Ok r, Ok c -> c.LineItems = l.LineItems @ r.LineItems
     | results -> failwith $"expected all Ok, got {results}"
