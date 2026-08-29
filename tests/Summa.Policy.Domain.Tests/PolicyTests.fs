@@ -59,7 +59,7 @@ let ``per-unit multiplies unit price by the supplied quantity`` () =
     let usage = [ { Unit = apiCalls; Amount = 2000L } ]
     match evaluate (PerUnit(apiCalls, 5L)) usage with
     | Ok breakdown ->
-        Assert.Equal<LineItem list>([ PerUnitCharge(apiCalls, 2000L, 5L, 10000L) ], breakdown.LineItems)
+        Assert.Equal<LineItem list>([ PerUnitCharge(apiCalls, 2000L, 5L) ], breakdown.LineItems)
         Assert.Equal(10000L, breakdown.Total)
     | Error e -> failwith $"expected Ok, got {e}"
 
@@ -70,7 +70,7 @@ let ``nested Sum itemizes every leaf in order and totals them`` () =
     match evaluate pricing usage with
     | Ok breakdown ->
         Assert.Equal<LineItem list>(
-            [ FlatCharge 1000L; PerUnitCharge(apiCalls, 100L, 5L, 500L) ],
+            [ FlatCharge 1000L; PerUnitCharge(apiCalls, 100L, 5L) ],
             breakdown.LineItems
         )
         Assert.Equal(1500L, breakdown.Total)
@@ -83,7 +83,7 @@ let ``a zero-amount leaf itemizes as a zero charge`` () =
     match evaluate pricing usage with
     | Ok breakdown ->
         Assert.Equal<LineItem list>(
-            [ FlatCharge 0L; PerUnitCharge(apiCalls, 0L, 5L, 0L) ],
+            [ FlatCharge 0L; PerUnitCharge(apiCalls, 0L, 5L) ],
             breakdown.LineItems
         )
         Assert.Equal(0L, breakdown.Total)

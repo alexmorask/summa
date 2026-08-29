@@ -22,7 +22,7 @@ type Usage =
 
 type LineItem =
     | FlatCharge of amount: Money
-    | PerUnitCharge of unit: UnitOfMeasure * quantity: int64 * unitPrice: Money * amount: Money
+    | PerUnitCharge of unit: UnitOfMeasure * quantity: int64 * unitPrice: Money
 
 type Breakdown =
     { LineItems: LineItem list
@@ -41,7 +41,7 @@ module Policy =
     let private amountOf lineItem =
         match lineItem with
         | FlatCharge amount -> amount
-        | PerUnitCharge (_, _, _, amount) -> amount
+        | PerUnitCharge (_, quantity, unitPrice) -> unitPrice * quantity
 
     let rec private perUnitLeafCount pricing =
         match pricing with
@@ -82,7 +82,7 @@ module Policy =
                     if u.Amount < 0L then
                         Error NegativeQuantity
                     else
-                        Ok([ PerUnitCharge(unit, u.Amount, unitPrice, unitPrice * u.Amount) ], rest)
+                        Ok([ PerUnitCharge(unit, u.Amount, unitPrice) ], rest)
                 | u :: _ -> Error(UnitMismatch(unit, u.Unit))
                 | [] -> countError
             | Sum children ->
