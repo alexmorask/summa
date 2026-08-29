@@ -43,14 +43,14 @@ module Policy =
         | FlatCharge amount -> amount
         | PerUnitCharge (_, _, _, amount) -> amount
 
-    let rec private perUnitLeafCount comp =
-        match comp with
+    let rec private perUnitLeafCount pricing =
+        match pricing with
         | Flat _ -> 0
         | PerUnit _ -> 1
         | Sum children -> children |> List.sumBy perUnitLeafCount
 
-    let rec private validate comp =
-        match comp with
+    let rec private validate pricing =
+        match pricing with
         | Flat amount -> if amount < 0L then Error NegativeAmount else Ok()
         | PerUnit (UnitOfMeasure unit, unitPrice) ->
             if String.IsNullOrWhiteSpace unit then Error EmptyUnitOfMeasure
@@ -58,8 +58,8 @@ module Policy =
             else Ok()
         | Sum [] -> Error EmptySum
         | Sum children ->
-            children
-            |> List.fold (fun acc child -> acc |> Result.bind (fun () -> validate child)) (Ok())
+            (Ok(), children)
+            ||> List.fold (fun acc child -> acc |> Result.bind (fun () -> validate child))
 
     let create id idempotencyKey pricing : Result<Policy, PricingError> =
         validate pricing
@@ -73,11 +73,11 @@ module Policy =
         let actual = List.length quantities
         let countError = Error(QuantityCountMismatch(expected, actual))
 
-        let rec eval comp qs =
-            match comp with
-            | Flat amount -> Ok([ FlatCharge amount ], qs)
+        let rec eval pricing quantities =
+            match pricing with
+            | Flat amount -> Ok([ FlatCharge amount ], quantities)
             | PerUnit (unit, unitPrice) ->
-                match qs with
+                match quantities with
                 | q :: rest when q.Unit = unit ->
                     if q.Amount < 0L then
                         Error NegativeQuantity
@@ -93,7 +93,7 @@ module Policy =
                         |> Result.bind (fun (items, remaining) ->
                             eval child remaining
                             |> Result.map (fun (childItems, remaining') -> items @ childItems, remaining')))
-                    (Ok([], qs))
+                    (Ok([], quantities))
 
         if expected <> actual then
             countError
