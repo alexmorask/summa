@@ -6,15 +6,15 @@ type Money = int64
 
 type UnitOfMeasure = UnitOfMeasure of string
 
-type PriceComponent =
+type PricingFormula =
     | Flat of amount: Money
     | PerUnit of unit: UnitOfMeasure * unitPrice: Money
-    | Sum of PriceComponent list
+    | Sum of PricingFormula list
 
 type Policy =
     { Id: Guid
       IdempotencyKey: string
-      Pricing: PriceComponent }
+      Pricing: PricingFormula }
 
 type Quantity =
     { Unit: UnitOfMeasure
