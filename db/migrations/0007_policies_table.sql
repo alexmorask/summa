@@ -19,3 +19,6 @@ CREATE TRIGGER policies_no_update_delete
 CREATE TRIGGER policies_no_truncate
     BEFORE TRUNCATE ON policy.policies
     FOR EACH STATEMENT EXECUTE FUNCTION policy.reject_mutation();
+
+ALTER TABLE policy.policies ENABLE ALWAYS TRIGGER policies_no_update_delete;
+ALTER TABLE policy.policies ENABLE ALWAYS TRIGGER policies_no_truncate;
