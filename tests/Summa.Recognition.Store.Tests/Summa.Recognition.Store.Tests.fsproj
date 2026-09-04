@@ -6,7 +6,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="ObligationEventStoreTests.fs" />
+    <Compile Include="EventStoreTests.fs" />
   </ItemGroup>
 
   <ItemGroup>

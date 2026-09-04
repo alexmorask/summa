@@ -9,8 +9,8 @@ open Summa.Ledger.Store
 let main _ =
     let connectionString = Environment.GetEnvironmentVariable "ConnectionStrings__Summa"
     let dataSource = NpgsqlDataSource.Create connectionString
-    let obligationStore = PostgresObligationEventStore.create dataSource
-    let ledgerStore = PostgresEventStore.create dataSource
+    let obligationStore = Summa.Recognition.Store.PostgresEventStore.create dataSource
+    let ledgerStore = Summa.Ledger.Store.PostgresEventStore.create dataSource
 
     Runner.run obligationStore ledgerStore DateTimeOffset.UtcNow
     |> fun task -> task.GetAwaiter().GetResult()

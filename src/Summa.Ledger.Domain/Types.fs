@@ -31,7 +31,7 @@ type LedgerError =
 
 module Transaction =
 
-    let create id occurredAt description correlation causation idem (entries: Entry list) =
+    let create id occurredAt description correlationId causationId idempotencyKey (entries: Entry list) =
         let total direction =
             entries
             |> List.sumBy (fun entry -> if entry.Direction = direction then entry.Amount else 0L)
@@ -46,7 +46,7 @@ module Transaction =
             Ok { Id = id
                  OccurredAt = occurredAt
                  Description = description
-                 CorrelationId = correlation
-                 CausationId = causation
-                 IdempotencyKey = idem
+                 CorrelationId = correlationId
+                 CausationId = causationId
+                 IdempotencyKey = idempotencyKey
                  Entries = entries }

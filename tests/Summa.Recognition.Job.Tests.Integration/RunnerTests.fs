@@ -14,8 +14,8 @@ open Summa.Recognition.Job
 let private dataSource =
     NpgsqlDataSource.Create "Host=localhost;Port=5432;Username=summa;Password=summa;Database=summa"
 
-let private obligationStore = PostgresObligationEventStore.create dataSource
-let private ledgerStore = PostgresEventStore.create dataSource
+let private obligationStore = Summa.Recognition.Store.PostgresEventStore.create dataSource
+let private ledgerStore = Summa.Ledger.Store.PostgresEventStore.create dataSource
 
 let private startDate = DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
 
