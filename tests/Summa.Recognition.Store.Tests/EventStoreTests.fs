@@ -1,4 +1,4 @@
-module ObligationEventStoreTests
+module EventStoreTests
 
 open System
 open System.Threading.Tasks
@@ -11,7 +11,7 @@ open Summa.Recognition.Store
 let private dataSource =
     NpgsqlDataSource.Create "Host=localhost;Port=5432;Username=summa;Password=summa;Database=summa"
 
-let private store = PostgresObligationEventStore.create dataSource
+let private store = PostgresEventStore.create dataSource
 
 let private newObligation idempotencyKey =
     let id = PerformanceObligationId (Guid.NewGuid())

@@ -6,9 +6,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="ObligationEventStore.fs" />
+    <Compile Include="EventStore.fs" />
     <Compile Include="Serialization.fs" />
-    <Compile Include="PostgresObligationEventStore.fs" />
+    <Compile Include="PostgresEventStore.fs" />
   </ItemGroup>
 
   <ItemGroup>

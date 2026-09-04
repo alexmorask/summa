@@ -12,21 +12,21 @@ type PricingFormula =
     | Sum of PricingFormula list
 
 type Policy =
-    { Id: Guid
-      IdempotencyKey: string
-      Pricing: PricingFormula }
+    { Id             : Guid
+      IdempotencyKey : string
+      Pricing        : PricingFormula }
 
 type Usage =
-    { Unit: UnitOfMeasure
-      Amount: int64 }
+    { Unit   : UnitOfMeasure
+      Amount : int64 }
 
 type LineItem =
     | FlatCharge of amount: Money
     | PerUnitCharge of unit: UnitOfMeasure * quantity: int64 * unitPrice: Money
 
 type Breakdown =
-    { LineItems: LineItem list
-      Total: Money }
+    { LineItems : LineItem list
+      Total     : Money }
 
 type PricingError =
     | EmptySum

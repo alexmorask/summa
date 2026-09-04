@@ -8,10 +8,10 @@ type AppendResult =
     | Appended of seq: int64
     | Duplicate of existingId: Guid
 
-type StoredObligationEvent =
+type StoredEvent =
     { Seq   : int64
       Event : ObligationCreated }
 
-type ObligationEventStore =
+type EventStore =
     { Append   : ObligationCreated -> Task<AppendResult>
-      ReadFrom : int64 -> Task<StoredObligationEvent list> }
+      ReadFrom : int64 -> Task<StoredEvent list> }

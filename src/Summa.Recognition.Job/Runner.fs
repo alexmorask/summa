@@ -18,7 +18,7 @@ let private toCommand (obligation: PerformanceObligation) (entry: RecognitionEnt
         [ { Account = AccountId "deferred_revenue"; Direction = Debit; Amount = entry.Amount }
           { Account = AccountId "revenue"; Direction = Credit; Amount = entry.Amount } ] }
 
-let run (obligationStore: ObligationEventStore) (ledgerStore: EventStore) (now: DateTimeOffset) : Task<unit> =
+let run (obligationStore: Summa.Recognition.Store.EventStore) (ledgerStore: Summa.Ledger.Store.EventStore) (now: DateTimeOffset) : Task<unit> =
     task {
         let! obligationEvents = obligationStore.ReadFrom 0L
         for stored in obligationEvents do

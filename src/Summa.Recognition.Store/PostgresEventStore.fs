@@ -5,7 +5,7 @@ open Npgsql
 open Npgsql.FSharp
 open Summa.Recognition.Domain
 
-module PostgresObligationEventStore =
+module PostgresEventStore =
 
     let private idempotencyKeyConstraint = "obligation_events_idempotency_key_key"
 
@@ -38,7 +38,7 @@ module PostgresObligationEventStore =
                 return Duplicate existingId
         }
 
-    let private readFrom (dataSource: NpgsqlDataSource) (lastSeq: int64) : Task<StoredObligationEvent list> =
+    let private readFrom (dataSource: NpgsqlDataSource) (lastSeq: int64) : Task<StoredEvent list> =
         dataSource
         |> Sql.fromDataSource
         |> Sql.query "SELECT seq, payload FROM recognition.obligation_events WHERE seq > @last_seq ORDER BY seq;"
@@ -47,6 +47,6 @@ module PostgresObligationEventStore =
             { Seq = read.int64 "seq"
               Event = ObligationCreated (Serialization.deserialize (read.text "payload")) })
 
-    let create (dataSource: NpgsqlDataSource) : ObligationEventStore =
+    let create (dataSource: NpgsqlDataSource) : EventStore =
         { Append = append dataSource
           ReadFrom = readFrom dataSource }
