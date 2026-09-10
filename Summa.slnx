@@ -9,6 +9,7 @@
     <Project Path="src/Summa.Recognition.Job/Summa.Recognition.Job.fsproj" />
     <Project Path="src/Summa.Policy.Domain/Summa.Policy.Domain.fsproj" />
     <Project Path="src/Summa.Policy.Store/Summa.Policy.Store.fsproj" />
+    <Project Path="src/Summa.Policy.Api/Summa.Policy.Api.fsproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Summa.Ledger.Domain.Tests/Summa.Ledger.Domain.Tests.fsproj" />
@@ -19,5 +20,6 @@
     <Project Path="tests/Summa.Recognition.Job.Tests.Integration/Summa.Recognition.Job.Tests.Integration.fsproj" />
     <Project Path="tests/Summa.Policy.Domain.Tests/Summa.Policy.Domain.Tests.fsproj" />
     <Project Path="tests/Summa.Policy.Store.Tests/Summa.Policy.Store.Tests.fsproj" />
+    <Project Path="tests/Summa.Policy.Api.Tests.Integration/Summa.Policy.Api.Tests.Integration.fsproj" />
   </Folder>
 </Solution>

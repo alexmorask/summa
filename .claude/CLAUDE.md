@@ -75,8 +75,8 @@ if one seems wrong, say so and let the owner decide.
 - **Projects are namespaced by bounded context:** `Summa.Ledger.Domain`,
   `Summa.Ledger.Store`, `Summa.Ledger.Api`, `Summa.Ledger.Projections`,
   `Summa.Recognition.Domain`, `Summa.Recognition.Store`,
-  `Summa.Recognition.Job`, `Summa.Policy.Domain`, `Summa.Policy.Store`. Rating
-  and Settlement will follow the same pattern.
+  `Summa.Recognition.Job`, `Summa.Policy.Domain`, `Summa.Policy.Store`,
+  `Summa.Policy.Api`. Rating and Settlement will follow the same pattern.
 - **F# file order matters** — declaration order within a project is significant;
   keep it deliberate.
 - **Model with types.** Prefer discriminated unions and records that make illegal
