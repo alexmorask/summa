@@ -1,0 +1,3 @@
+disallowed-methods = [
+    { path = "std::time::SystemTime::now", reason = "Time is an input (ADR 0003): take `now` as a parameter or use the injected clock." },
+]
