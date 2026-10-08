@@ -23,6 +23,8 @@ A Cargo workspace laid out as a modular monolith (ADR 0002): one app, with each 
 
 Add a crate only when a milestone needs it.
 
+Every crate inherits the workspace lints (`[lints] workspace = true`); unsafe code is forbidden.
+
 ## Commands
 
 ```sh
