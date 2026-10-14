@@ -29,8 +29,8 @@ impl Currency for Usd {
 ///
 /// It may be negative, because balances can be. `Money` itself doesn't require a
 /// positive amount, even though amounts on entries must be positive. There is
-/// no `+` operator:
-/// amounts are added with [`Money::checked_add`], which rejects overflow.
+/// no `+` operator: amounts are added with [`Money::checked_add`], which
+/// rejects overflow.
 ///
 /// ```
 /// use ledger::{Money, Usd};
