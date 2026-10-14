@@ -8,9 +8,10 @@ use std::marker::PhantomData;
 /// A currency, used as a type parameter so amounts in different currencies
 /// can't be mixed (ADR 0004).
 ///
-/// The supertraits let `Money<C>` derive its traits: `#[derive]` requires the
-/// same traits of `C`, even though `C` only appears in `PhantomData`.
-pub trait Currency: Copy + Clone + fmt::Debug + PartialEq + Eq + PartialOrd + Ord + Hash {
+/// The supertraits guarantee every `Money<C>` gets its derived traits:
+/// `#[derive]` only implements a trait for `Money<C>` when `C` has it too, even
+/// though `C` only appears in `PhantomData`.
+pub trait Currency: Copy + Clone + PartialEq + Eq + PartialOrd + Ord + Hash {
     /// The ISO 4217 code, like `"USD"`.
     const CODE: &'static str;
 }
@@ -26,7 +27,9 @@ impl Currency for Usd {
 /// An amount of money: a whole number of minor units in currency `C`, such as
 /// cents for US dollars.
 ///
-/// It may be negative, because balances can be. There is no `+` operator:
+/// It may be negative, because balances can be. `Money` itself doesn't require a
+/// positive amount, even though amounts on entries must be positive. There is
+/// no `+` operator:
 /// amounts are added with [`Money::checked_add`], which rejects overflow.
 ///
 /// ```
@@ -36,6 +39,17 @@ impl Currency for Usd {
 /// let plan = Money::<Usd>::from_minor_units(2_000);
 /// let tax = Money::<Usd>::from_minor_units(160);
 /// assert_eq!(plan.checked_add(tax), Ok(Money::from_minor_units(2_160)));
+/// ```
+///
+/// The same amounts can't be added with `+`, so no caller can skip the
+/// overflow check:
+///
+/// ```compile_fail
+/// use ledger::{Money, Usd};
+///
+/// let plan = Money::<Usd>::from_minor_units(2_000);
+/// let tax = Money::<Usd>::from_minor_units(160);
+/// let _total = plan + tax;
 /// ```
 ///
 /// Adding amounts in the same currency compiles:
@@ -71,7 +85,7 @@ impl Currency for Usd {
 /// let b = Money::<Eur>::from_minor_units(250);
 /// let _sum = a.checked_add(b);
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Money<C: Currency> {
     minor_units: i64,
     currency: PhantomData<C>,
@@ -98,6 +112,14 @@ impl<C: Currency> Money<C> {
             .checked_add(other.minor_units)
             .map(Self::from_minor_units)
             .ok_or(MoneyError::Overflow)
+    }
+}
+
+/// Prints `Money(2160 USD)`: the minor units and the currency code, without
+/// the `PhantomData` marker a derived `Debug` would show.
+impl<C: Currency> fmt::Debug for Money<C> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Money({} {})", self.minor_units, C::CODE)
     }
 }
 
@@ -138,6 +160,12 @@ mod tests {
     #[test]
     fn usd_code_is_usd() {
         assert_eq!(Usd::CODE, "USD");
+    }
+
+    #[test]
+    fn debug_shows_minor_units_and_currency_code() {
+        assert_eq!(format!("{:?}", usd(2_160)), "Money(2160 USD)");
+        assert_eq!(format!("{:?}", usd(-500)), "Money(-500 USD)");
     }
 
     #[test]

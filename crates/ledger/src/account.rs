@@ -10,7 +10,7 @@ pub enum Side {
 
 impl Side {
     /// The other side.
-    pub fn opposite(self) -> Side {
+    pub const fn opposite(self) -> Side {
         match self {
             Side::Debit => Side::Credit,
             Side::Credit => Side::Debit,
@@ -30,7 +30,7 @@ pub enum AccountType {
 
 impl AccountType {
     /// The side that makes an account of this type grow.
-    fn normal_side(self) -> Side {
+    const fn normal_side(self) -> Side {
         match self {
             AccountType::Asset | AccountType::Expense => Side::Debit,
             AccountType::Liability | AccountType::Equity | AccountType::Revenue => Side::Credit,
@@ -62,8 +62,8 @@ impl AccountNumber {
 
 /// One account in the chart of accounts.
 ///
-/// Normal side and permanence are derived from the type and contra flag,
-/// never stored, so they can't disagree with them.
+/// Normal side (from the type and contra flag) and permanence (from the type
+/// alone) are derived, never stored, so they can't disagree with them.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Account {
     number: AccountNumber,
@@ -73,17 +73,28 @@ pub struct Account {
 }
 
 impl Account {
-    pub const fn new(
+    /// An ordinary account, with its type's normal side.
+    pub const fn new(number: AccountNumber, name: &'static str, account_type: AccountType) -> Self {
+        Self {
+            number,
+            name,
+            account_type,
+            contra: false,
+        }
+    }
+
+    /// A contra account: it belongs to `account_type` but works against it, so
+    /// its normal side is the opposite of its type's.
+    pub const fn contra(
         number: AccountNumber,
         name: &'static str,
         account_type: AccountType,
-        contra: bool,
     ) -> Self {
         Self {
             number,
             name,
             account_type,
-            contra,
+            contra: true,
         }
     }
 
@@ -105,7 +116,7 @@ impl Account {
 
     /// The side that makes this account grow: its type's normal side, or the
     /// opposite for a contra account.
-    pub fn normal_side(&self) -> Side {
+    pub const fn normal_side(&self) -> Side {
         let side = self.account_type.normal_side();
         if self.contra { side.opposite() } else { side }
     }
@@ -116,7 +127,7 @@ impl Account {
     /// temporary account instead of debited to Retained Earnings directly,
     /// which would need permanence as its own setting. Summa has no such
     /// account.
-    pub fn permanence(&self) -> Permanence {
+    pub const fn permanence(&self) -> Permanence {
         match self.account_type {
             AccountType::Asset | AccountType::Liability | AccountType::Equity => {
                 Permanence::Permanent
@@ -139,8 +150,12 @@ mod tests {
         AccountType::Expense,
     ];
 
-    fn account(account_type: AccountType, contra: bool) -> Account {
-        Account::new(AccountNumber::new(1), "Test", account_type, contra)
+    fn account(account_type: AccountType) -> Account {
+        Account::new(AccountNumber::new(1), "Test", account_type)
+    }
+
+    fn contra_account(account_type: AccountType) -> Account {
+        Account::contra(AccountNumber::new(1), "Test", account_type)
     }
 
     /// Normal sides from the Chart of Accounts, written out independently of
@@ -162,13 +177,21 @@ mod tests {
     }
 
     #[test]
+    fn derived_values_are_available_at_compile_time() {
+        const CONTRA_REVENUE: Account =
+            Account::contra(AccountNumber::new(1), "Test", AccountType::Revenue);
+        const SIDE: Side = CONTRA_REVENUE.normal_side();
+        const OTHER_SIDE: Side = SIDE.opposite();
+        const PERMANENCE: Permanence = CONTRA_REVENUE.permanence();
+
+        assert_eq!(SIDE, Side::Debit);
+        assert_eq!(OTHER_SIDE, Side::Credit);
+        assert_eq!(PERMANENCE, Permanence::Temporary);
+    }
+
+    #[test]
     fn getters_return_what_was_given() {
-        let a = Account::new(
-            AccountNumber::new(42),
-            "Test Contra",
-            AccountType::Revenue,
-            true,
-        );
+        let a = Account::contra(AccountNumber::new(42), "Test Contra", AccountType::Revenue);
         assert_eq!(a.number().get(), 42);
         assert_eq!(a.name(), "Test Contra");
         assert_eq!(a.account_type(), AccountType::Revenue);
@@ -176,49 +199,39 @@ mod tests {
     }
 
     #[test]
+    fn new_accounts_are_not_contra() {
+        assert!(!account(AccountType::Revenue).is_contra());
+    }
+
+    #[test]
     fn assets_are_debit_normal() {
-        assert_eq!(
-            account(AccountType::Asset, false).normal_side(),
-            Side::Debit
-        );
+        assert_eq!(account(AccountType::Asset).normal_side(), Side::Debit);
     }
 
     #[test]
     fn liabilities_are_credit_normal() {
-        assert_eq!(
-            account(AccountType::Liability, false).normal_side(),
-            Side::Credit
-        );
+        assert_eq!(account(AccountType::Liability).normal_side(), Side::Credit);
     }
 
     #[test]
     fn equity_is_credit_normal() {
-        assert_eq!(
-            account(AccountType::Equity, false).normal_side(),
-            Side::Credit
-        );
+        assert_eq!(account(AccountType::Equity).normal_side(), Side::Credit);
     }
 
     #[test]
     fn revenue_is_credit_normal() {
-        assert_eq!(
-            account(AccountType::Revenue, false).normal_side(),
-            Side::Credit
-        );
+        assert_eq!(account(AccountType::Revenue).normal_side(), Side::Credit);
     }
 
     #[test]
     fn expenses_are_debit_normal() {
-        assert_eq!(
-            account(AccountType::Expense, false).normal_side(),
-            Side::Debit
-        );
+        assert_eq!(account(AccountType::Expense).normal_side(), Side::Debit);
     }
 
     #[test]
     fn contra_revenue_is_debit_normal() {
         assert_eq!(
-            account(AccountType::Revenue, true).normal_side(),
+            contra_account(AccountType::Revenue).normal_side(),
             Side::Debit
         );
     }
@@ -226,7 +239,7 @@ mod tests {
     #[test]
     fn contra_asset_is_credit_normal() {
         assert_eq!(
-            account(AccountType::Asset, true).normal_side(),
+            contra_account(AccountType::Asset).normal_side(),
             Side::Credit
         );
     }
@@ -238,33 +251,25 @@ mod tests {
             AccountType::Liability,
             AccountType::Equity,
         ] {
-            assert_eq!(
-                account(t, false).permanence(),
-                Permanence::Permanent,
-                "{t:?}"
-            );
+            assert_eq!(account(t).permanence(), Permanence::Permanent, "{t:?}");
         }
     }
 
     #[test]
     fn income_statement_types_are_temporary() {
         for t in [AccountType::Revenue, AccountType::Expense] {
-            assert_eq!(
-                account(t, false).permanence(),
-                Permanence::Temporary,
-                "{t:?}"
-            );
+            assert_eq!(account(t).permanence(), Permanence::Temporary, "{t:?}");
         }
     }
 
     #[test]
     fn contra_flag_does_not_change_permanence() {
         assert_eq!(
-            account(AccountType::Revenue, true).permanence(),
+            contra_account(AccountType::Revenue).permanence(),
             Permanence::Temporary
         );
         assert_eq!(
-            account(AccountType::Asset, true).permanence(),
+            contra_account(AccountType::Asset).permanence(),
             Permanence::Permanent
         );
     }
@@ -277,8 +282,8 @@ mod tests {
             number in any::<u32>(),
             name in prop::sample::select(vec!["A", "Test Contra", "Test"]),
         ) {
-            let plain = Account::new(AccountNumber::new(number), name, account_type, false);
-            let contra = Account::new(AccountNumber::new(number), name, account_type, true);
+            let plain = Account::new(AccountNumber::new(number), name, account_type);
+            let contra = Account::contra(AccountNumber::new(number), name, account_type);
 
             prop_assert_eq!(plain.normal_side(), chart_normal_side(account_type));
             prop_assert_eq!(contra.normal_side(), plain.normal_side().opposite());
