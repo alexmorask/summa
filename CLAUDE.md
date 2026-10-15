@@ -25,6 +25,8 @@ Add a crate only when a milestone needs it.
 
 Every crate inherits the workspace lints (`[lints] workspace = true`); unsafe code is forbidden.
 
+Release builds keep integer overflow checks on (`overflow-checks = true` in the workspace `Cargo.toml`), so stray integer arithmetic panics instead of silently wrapping and inventing or losing money. Money still adds through `checked_add`, which returns an error instead of panicking.
+
 ## Commands
 
 ```sh
@@ -40,6 +42,7 @@ All four must pass before a PR.
 
 - Every domain rule has a test, including the rejection case.
 - Rules that must always hold (e.g. every transaction balances) also get property-based tests with `proptest`.
+- If `proptest` records a failure in a `proptest-regressions/` folder, commit it, so the failing case replays on every machine.
 - Tests use a fixed, passed-in time, never the system clock.
 
 ## Conventions

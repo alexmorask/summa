@@ -1,0 +1,226 @@
+//! Money: a whole number of minor units (cents, for USD) in a currency fixed
+//! by the type.
+
+use std::fmt;
+use std::hash::Hash;
+use std::marker::PhantomData;
+
+/// A currency, used as a type parameter so amounts in different currencies
+/// can't be mixed (ADR 0004).
+///
+/// The supertraits guarantee every `Money<C>` gets its derived traits:
+/// `#[derive]` only implements a trait for `Money<C>` when `C` has it too, even
+/// though `C` only appears in `PhantomData`.
+pub trait Currency: Copy + Clone + PartialEq + Eq + PartialOrd + Ord + Hash {
+    /// The ISO 4217 code, like `"USD"`.
+    const CODE: &'static str;
+}
+
+/// US dollars, the only currency in v1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Usd;
+
+impl Currency for Usd {
+    const CODE: &'static str = "USD";
+}
+
+/// An amount of money: a whole number of minor units in currency `C`, such as
+/// cents for US dollars.
+///
+/// It may be negative, because balances can be. `Money` itself doesn't require a
+/// positive amount, even though amounts on entries must be positive. There is
+/// no `+` operator: amounts are added with [`Money::checked_add`], which
+/// rejects overflow.
+///
+/// ```
+/// use ledger::{Money, Usd};
+///
+/// // $20.00 + $1.60 = $21.60
+/// let plan = Money::<Usd>::from_minor_units(2_000);
+/// let tax = Money::<Usd>::from_minor_units(160);
+/// assert_eq!(plan.checked_add(tax), Ok(Money::from_minor_units(2_160)));
+/// ```
+///
+/// The same amounts can't be added with `+`, so no caller can skip the
+/// overflow check:
+///
+/// ```compile_fail
+/// use ledger::{Money, Usd};
+///
+/// let plan = Money::<Usd>::from_minor_units(2_000);
+/// let tax = Money::<Usd>::from_minor_units(160);
+/// let _total = plan + tax;
+/// ```
+///
+/// Adding amounts in the same currency compiles:
+///
+/// ```
+/// use ledger::{Currency, Money};
+///
+/// #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// struct Eur;
+///
+/// impl Currency for Eur {
+///     const CODE: &'static str = "EUR";
+/// }
+///
+/// let a = Money::<Eur>::from_minor_units(100);
+/// let b = Money::<Eur>::from_minor_units(250);
+/// let _sum = a.checked_add(b);
+/// ```
+///
+/// The same code with different currencies doesn't:
+///
+/// ```compile_fail
+/// use ledger::{Currency, Money, Usd};
+///
+/// #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// struct Eur;
+///
+/// impl Currency for Eur {
+///     const CODE: &'static str = "EUR";
+/// }
+///
+/// let a = Money::<Usd>::from_minor_units(100);
+/// let b = Money::<Eur>::from_minor_units(250);
+/// let _sum = a.checked_add(b);
+/// ```
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Money<C: Currency> {
+    minor_units: i64,
+    currency: PhantomData<C>,
+}
+
+impl<C: Currency> Money<C> {
+    /// An amount of `minor_units` in currency `C`.
+    pub const fn from_minor_units(minor_units: i64) -> Self {
+        Self {
+            minor_units,
+            currency: PhantomData,
+        }
+    }
+
+    /// The amount in minor units.
+    pub const fn minor_units(self) -> i64 {
+        self.minor_units
+    }
+
+    /// Adds two amounts, or returns [`MoneyError::Overflow`] if the exact sum
+    /// doesn't fit in an `i64` number of minor units.
+    pub fn checked_add(self, other: Self) -> Result<Self, MoneyError> {
+        self.minor_units
+            .checked_add(other.minor_units)
+            .map(Self::from_minor_units)
+            .ok_or(MoneyError::Overflow)
+    }
+}
+
+/// Prints `Money(2160 USD)`: the minor units and the currency code, without
+/// the `PhantomData` marker a derived `Debug` would show.
+impl<C: Currency> fmt::Debug for Money<C> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Money({} {})", self.minor_units, C::CODE)
+    }
+}
+
+/// Why an operation on [`Money`] was rejected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MoneyError {
+    /// The exact result doesn't fit in an `i64` number of minor units.
+    Overflow,
+}
+
+impl fmt::Display for MoneyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MoneyError::Overflow => {
+                f.write_str("amount is too large or too small for the ledger to hold")
+            }
+        }
+    }
+}
+
+impl std::error::Error for MoneyError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn usd(cents: i64) -> Money<Usd> {
+        Money::from_minor_units(cents)
+    }
+
+    #[test]
+    fn stores_whole_minor_units() {
+        // $21.60 is 2,160 cents, the minor unit of USD.
+        assert_eq!(usd(2_160).minor_units(), 2_160);
+    }
+
+    #[test]
+    fn usd_code_is_usd() {
+        assert_eq!(Usd::CODE, "USD");
+    }
+
+    #[test]
+    fn debug_shows_minor_units_and_currency_code() {
+        assert_eq!(format!("{:?}", usd(2_160)), "Money(2160 USD)");
+        assert_eq!(format!("{:?}", usd(-500)), "Money(-500 USD)");
+    }
+
+    #[test]
+    fn adds_amounts_exactly() {
+        // $20.00 + $1.60 = $21.60
+        assert_eq!(usd(2_000).checked_add(usd(160)), Ok(usd(2_160)));
+    }
+
+    #[test]
+    fn adds_negative_and_zero_amounts() {
+        // −$5.00 + $2.00 = −$3.00: balances can go below zero.
+        assert_eq!(usd(-500).checked_add(usd(200)), Ok(usd(-300)));
+        // $0.00 + $21.60 = $21.60
+        assert_eq!(usd(0).checked_add(usd(2_160)), Ok(usd(2_160)));
+    }
+
+    #[test]
+    fn sums_exactly_at_the_limits_are_accepted() {
+        assert_eq!(usd(i64::MAX - 1).checked_add(usd(1)), Ok(usd(i64::MAX)));
+        assert_eq!(usd(i64::MIN + 1).checked_add(usd(-1)), Ok(usd(i64::MIN)));
+        assert_eq!(usd(i64::MAX).checked_add(usd(i64::MIN)), Ok(usd(-1)));
+    }
+
+    #[test]
+    fn rejects_overflow_above_the_maximum() {
+        assert_eq!(usd(i64::MAX).checked_add(usd(1)), Err(MoneyError::Overflow));
+    }
+
+    #[test]
+    fn rejects_overflow_below_the_minimum() {
+        assert_eq!(
+            usd(i64::MIN).checked_add(usd(-1)),
+            Err(MoneyError::Overflow)
+        );
+    }
+
+    #[test]
+    fn overflow_error_explains_itself() {
+        assert_eq!(
+            MoneyError::Overflow.to_string(),
+            "amount is too large or too small for the ledger to hold"
+        );
+    }
+
+    proptest! {
+        /// Adding never loses or invents a cent: the result is the exact sum,
+        /// computed in `i128` where it can't overflow, or an error.
+        #[test]
+        fn adding_never_loses_or_invents_a_cent(a in any::<i64>(), b in any::<i64>()) {
+            let exact = i128::from(a) + i128::from(b);
+            let result = usd(a).checked_add(usd(b));
+            match i64::try_from(exact) {
+                Ok(sum) => prop_assert_eq!(result, Ok(usd(sum))),
+                Err(_) => prop_assert_eq!(result, Err(MoneyError::Overflow)),
+            }
+        }
+    }
+}

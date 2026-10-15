@@ -48,6 +48,7 @@ Each milestone adds one idea, ends with something visibly working, and starts wi
 - **Rust** backend ([ADR 0001](docs/adr/0001-rust-with-go-fallback.md)), with a **TypeScript** front end to come.
 - **A modular monolith:** one app, with each module in its own crate and boundaries checked by the compiler ([ADR 0002](docs/adr/0002-modular-monolith.md)).
 - **Time is an input:** code never reads the system clock, so a simulated clock can fast-forward renewals and revenue recognition ([ADR 0003](docs/adr/0003-time-as-an-input.md)).
+- **Currency in the type:** an amount is `Money<Usd>`, so adding amounts in different currencies doesn't compile ([ADR 0004](docs/adr/0004-currency-as-a-type-parameter.md)).
 - **PostgreSQL** for append-only storage, from M2.
 - **OpenTelemetry** for metrics, traces and logs, including ledger-specific signals like whether the trial balance still balances.
 - **Simulated** payment provider, tax provider and clock, so the demo can decline cards, change tax locations and fast-forward time.
