@@ -122,6 +122,137 @@ impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
     pub const fn entries(&self) -> &[Entry<C, T>] {
         self.entries.as_slice()
     }
+
+    /// Posts the transaction: stamps the time the ledger recorded it.
+    ///
+    /// This is the authoritative time check: nothing may be recorded as
+    /// having happened after it was written down, so `effective_at` must not
+    /// be after `recorded_at`. `build`'s check against `now` is early feedback
+    /// for the caller.
+    ///
+    /// Private to the ledger crate, so no other crate can post or choose a
+    /// recorded time. Ledger storage calls it from M2 (SUM-9); until then only
+    /// tests do.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "called by ledger storage from M2 (SUM-9)")
+    )]
+    pub(crate) fn post(
+        self,
+        recorded_at: DateTime<Utc>,
+    ) -> Result<PostedTransaction<C, T>, TransactionError<C>> {
+        if self.effective_at > recorded_at {
+            return Err(TransactionError::EffectiveAfterRecorded {
+                effective_at: self.effective_at,
+                recorded_at,
+            });
+        }
+        Ok(PostedTransaction {
+            transaction: self,
+            recorded_at,
+        })
+    }
+}
+
+/// A transaction the ledger has posted: everything the unposted transaction
+/// had, plus the time it was recorded. Only the ledger can create one.
+///
+/// From outside the ledger crate, a transaction can be built:
+///
+/// ```
+/// use chrono::{TimeZone, Utc};
+/// use ledger::{Account, AccountNumber, AccountType, Chart, Money, Tag, UnpostedTransaction, Usd};
+///
+/// #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+/// enum ExampleTag {
+///     Customer(u64),
+/// }
+///
+/// impl Tag for ExampleTag {
+///     fn kind(&self) -> &'static str {
+///         match self {
+///             ExampleTag::Customer(_) => "customer",
+///         }
+///     }
+/// }
+///
+/// let cash = AccountNumber::new(1);
+/// let sales = AccountNumber::new(2);
+/// let chart = Chart::new([
+///     Account::new(cash, "Cash", AccountType::Asset),
+///     Account::new(sales, "Sales", AccountType::Revenue),
+/// ])
+/// .unwrap();
+/// let now = Utc.with_ymd_and_hms(2026, 10, 16, 12, 0, 0).unwrap();
+/// let amount = Money::<Usd>::from_minor_units(1_000);
+/// let unposted = UnpostedTransaction::builder(now, "A sale")
+///     .debit(cash, amount, [ExampleTag::Customer(42)])
+///     .credit(sales, amount, [ExampleTag::Customer(42)])
+///     .build(&chart, now)
+///     .unwrap();
+/// ```
+///
+/// but the same code can't post it:
+///
+/// ```compile_fail
+/// use chrono::{TimeZone, Utc};
+/// use ledger::{Account, AccountNumber, AccountType, Chart, Money, Tag, UnpostedTransaction, Usd};
+///
+/// #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+/// enum ExampleTag {
+///     Customer(u64),
+/// }
+///
+/// impl Tag for ExampleTag {
+///     fn kind(&self) -> &'static str {
+///         match self {
+///             ExampleTag::Customer(_) => "customer",
+///         }
+///     }
+/// }
+///
+/// let cash = AccountNumber::new(1);
+/// let sales = AccountNumber::new(2);
+/// let chart = Chart::new([
+///     Account::new(cash, "Cash", AccountType::Asset),
+///     Account::new(sales, "Sales", AccountType::Revenue),
+/// ])
+/// .unwrap();
+/// let now = Utc.with_ymd_and_hms(2026, 10, 16, 12, 0, 0).unwrap();
+/// let amount = Money::<Usd>::from_minor_units(1_000);
+/// let unposted = UnpostedTransaction::builder(now, "A sale")
+///     .debit(cash, amount, [ExampleTag::Customer(42)])
+///     .credit(sales, amount, [ExampleTag::Customer(42)])
+///     .build(&chart, now)
+///     .unwrap();
+/// let _posted = unposted.post(now);
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PostedTransaction<C: Currency, T: Tag> {
+    transaction: UnpostedTransaction<C, T>,
+    recorded_at: DateTime<Utc>,
+}
+
+impl<C: Currency, T: Tag> PostedTransaction<C, T> {
+    /// When the event happened in the business.
+    pub const fn effective_at(&self) -> DateTime<Utc> {
+        self.transaction.effective_at
+    }
+
+    /// When the ledger recorded it. Set by the ledger, never by the caller.
+    pub const fn recorded_at(&self) -> DateTime<Utc> {
+        self.recorded_at
+    }
+
+    /// Free text for humans. Never used by the rules.
+    pub const fn description(&self) -> &str {
+        self.transaction.description()
+    }
+
+    /// The entries, in the order they were added.
+    pub const fn entries(&self) -> &[Entry<C, T>] {
+        self.transaction.entries()
+    }
 }
 
 /// Collects a transaction's parts. Nothing is checked until
@@ -268,6 +399,11 @@ pub enum TransactionError<C: Currency> {
     Overflow,
     /// Total debits don't equal total credits.
     Unbalanced { debits: Money<C>, credits: Money<C> },
+    /// `post` was given a recorded time before the effective time.
+    EffectiveAfterRecorded {
+        effective_at: DateTime<Utc>,
+        recorded_at: DateTime<Utc>,
+    },
 }
 
 impl<C: Currency> fmt::Display for TransactionError<C> {
@@ -302,6 +438,15 @@ impl<C: Currency> fmt::Display for TransactionError<C> {
             TransactionError::Unbalanced { debits, credits } => {
                 write!(f, "debits {debits} ≠ credits {credits}")
             }
+            TransactionError::EffectiveAfterRecorded {
+                effective_at,
+                recorded_at,
+            } => write!(
+                f,
+                "effective time {} is after recorded time ({})",
+                utc(*effective_at),
+                utc(*recorded_at)
+            ),
         }
     }
 }
@@ -723,5 +868,49 @@ mod tests {
         for (error, message) in cases {
             assert_eq!(error.to_string(), message);
         }
+    }
+
+    // --- Posting ---
+
+    #[test]
+    fn post_stamps_the_recorded_time_and_keeps_everything_else() {
+        let unposted = balanced().build(&chart(), noon()).unwrap();
+        let recorded_at = noon() + TimeDelta::days(2);
+        let posted = unposted.clone().post(recorded_at).unwrap();
+        assert_eq!(posted.recorded_at(), recorded_at);
+        assert_eq!(posted.effective_at(), unposted.effective_at());
+        assert_eq!(posted.description(), unposted.description());
+        assert_eq!(posted.entries(), unposted.entries());
+    }
+
+    #[test]
+    fn post_accepts_a_recorded_time_equal_to_the_effective_time() {
+        let unposted = balanced().build(&chart(), noon()).unwrap();
+        assert!(unposted.post(noon()).is_ok());
+    }
+
+    #[test]
+    fn post_rejects_a_recorded_time_before_the_effective_time() {
+        let unposted = balanced().build(&chart(), noon()).unwrap();
+        let earlier = noon() - TimeDelta::seconds(1);
+        assert_eq!(
+            unposted.post(earlier),
+            Err(TransactionError::EffectiveAfterRecorded {
+                effective_at: noon(),
+                recorded_at: earlier,
+            })
+        );
+    }
+
+    #[test]
+    fn effective_after_recorded_explains_itself() {
+        let error = TransactionError::<Usd>::EffectiveAfterRecorded {
+            effective_at: Utc.with_ymd_and_hms(2026, 10, 17, 0, 0, 0).unwrap(),
+            recorded_at: noon(),
+        };
+        assert_eq!(
+            error.to_string(),
+            "effective time 2026-10-17T00:00:00Z is after recorded time (2026-10-16T12:00:00Z)"
+        );
     }
 }

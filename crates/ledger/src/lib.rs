@@ -11,4 +11,6 @@ pub use account::{Account, AccountNumber, AccountType, Permanence, Side};
 pub use chart::{Chart, ChartError};
 pub use money::{Currency, Money, MoneyError, Usd};
 pub use tag::Tag;
-pub use transaction::{Entry, TransactionBuilder, TransactionError, UnpostedTransaction};
+pub use transaction::{
+    Entry, PostedTransaction, TransactionBuilder, TransactionError, UnpostedTransaction,
+};
