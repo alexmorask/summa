@@ -464,6 +464,7 @@ mod tests {
     use crate::account::{Account, AccountType};
     use crate::money::Usd;
     use chrono::{TimeDelta, TimeZone};
+    use proptest::prelude::*;
 
     #[derive(Clone, Debug, PartialEq, Eq, Hash)]
     enum TestTag {
@@ -912,5 +913,108 @@ mod tests {
             error.to_string(),
             "effective time 2026-10-17T00:00:00Z is after recorded time (2026-10-16T12:00:00Z)"
         );
+    }
+
+    // --- Rules that must always hold ---
+
+    /// Any tag, from a small range of values so kinds repeat often.
+    fn any_tag() -> impl Strategy<Value = TestTag> {
+        prop_oneof![
+            (0_u64..3).prop_map(TestTag::Alpha),
+            (0_u64..3).prop_map(TestTag::Beta),
+        ]
+    }
+
+    /// Any entry: an account (4 isn't in the chart), a side, an amount
+    /// including zero and negatives, and up to two tags. Amounts come from a
+    /// narrow range so random entries balance often and the `Ok` branch of the
+    /// property below is well exercised.
+    fn any_entry() -> impl Strategy<Value = (u32, bool, i64, Vec<TestTag>)> {
+        (
+            1_u32..=4,
+            any::<bool>(),
+            -2_i64..=5,
+            prop::collection::vec(any_tag(), 0..3),
+        )
+    }
+
+    /// One balanced group of entries: a debit of `x` and a credit of `x`, or a
+    /// debit of `x + y` split into credits of `x` and `y`.
+    fn balanced_group() -> impl Strategy<Value = (i64, Option<i64>, u32, u32)> {
+        (
+            1_i64..=1_000_000,
+            prop::option::of(1_i64..=1_000_000),
+            1_u32..=3,
+            1_u32..=3,
+        )
+    }
+
+    proptest! {
+        /// No transaction that can be built breaks a rule: whenever `build`
+        /// succeeds, there are at least two entries, every account is in the
+        /// chart, every amount is positive, no entry repeats a tag kind, and
+        /// debits equal credits (summed in `i128`, where they can't overflow).
+        #[test]
+        fn no_buildable_transaction_breaks_a_rule(
+            entries in prop::collection::vec(any_entry(), 0..6),
+        ) {
+            let mut b = builder();
+            for (number, is_debit, cents, tags) in entries {
+                let account = AccountNumber::new(number);
+                b = if is_debit {
+                    b.debit(account, usd(cents), tags)
+                } else {
+                    b.credit(account, usd(cents), tags)
+                };
+            }
+            let chart = chart();
+            if let Ok(t) = b.build(&chart, noon()) {
+                prop_assert!(t.entries().len() >= 2);
+                prop_assert!(t.entries().iter().all(|e| chart.get(e.account()).is_some()));
+                prop_assert!(t.entries().iter().all(|e| e.amount().minor_units() > 0));
+                for e in t.entries() {
+                    let kinds: HashSet<&str> = e.tags().iter().map(Tag::kind).collect();
+                    prop_assert_eq!(kinds.len(), e.tags().len());
+                }
+                let sum = |side: Side| -> i128 {
+                    t.entries()
+                        .iter()
+                        .filter(|e| e.side() == side)
+                        .map(|e| i128::from(e.amount().minor_units()))
+                        .sum()
+                };
+                prop_assert_eq!(sum(Side::Debit), sum(Side::Credit));
+            }
+        }
+
+        /// Every valid transaction builds. Without this, the property above
+        /// could pass by rejecting everything.
+        #[test]
+        fn every_valid_transaction_builds(
+            groups in prop::collection::vec(balanced_group(), 1..4),
+            alpha in prop::option::of(0_u64..100),
+            beta in prop::option::of(0_u64..100),
+        ) {
+            let tags: Vec<TestTag> = alpha
+                .map(TestTag::Alpha)
+                .into_iter()
+                .chain(beta.map(TestTag::Beta))
+                .collect();
+            let mut b = builder();
+            for (x, y, debit, credit) in groups {
+                let (debit, credit) = (AccountNumber::new(debit), AccountNumber::new(credit));
+                b = match y {
+                    None => b
+                        .debit(debit, usd(x), tags.clone())
+                        .credit(credit, usd(x), tags.clone()),
+                    Some(y) => b
+                        .debit(debit, usd(x + y), tags.clone())
+                        .credit(credit, usd(x), tags.clone())
+                        .credit(credit, usd(y), tags.clone()),
+                };
+            }
+            let result = b.build(&chart(), noon());
+            prop_assert!(result.is_ok(), "rejected: {:?}", result);
+        }
     }
 }
