@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 use common::{
     CASH, DEFERRED_REVENUE_SUBSCRIPTIONS, DISCOUNTS_AND_REFUNDS, PAYMENT_PROCESSING_FEES,
-    PAYMENT_PROVIDER_CLEARING, RETAINED_EARNINGS, SUBSCRIPTION_REVENUE,
+    PAYMENT_PROVIDER_CLEARING, RETAINED_EARNINGS, SUBSCRIPTION_REVENUE, playground_chart,
 };
 use ledger::{AccountType, Side};
 
@@ -86,4 +86,20 @@ fn playground_account_numbers_are_unique() {
     ];
     let numbers: HashSet<_> = chart.iter().map(|a| a.number()).collect();
     assert_eq!(numbers.len(), chart.len());
+}
+
+#[test]
+fn playground_chart_holds_every_playground_account() {
+    let chart = playground_chart();
+    for account in [
+        CASH,
+        PAYMENT_PROVIDER_CLEARING,
+        DEFERRED_REVENUE_SUBSCRIPTIONS,
+        RETAINED_EARNINGS,
+        SUBSCRIPTION_REVENUE,
+        DISCOUNTS_AND_REFUNDS,
+        PAYMENT_PROCESSING_FEES,
+    ] {
+        assert_eq!(chart.get(account.number()), Some(&account));
+    }
 }
