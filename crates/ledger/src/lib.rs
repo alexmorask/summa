@@ -2,7 +2,9 @@
 //! module in Summa is built on.
 
 mod account;
+mod chart;
 mod money;
 
 pub use account::{Account, AccountNumber, AccountType, Permanence, Side};
+pub use chart::{Chart, ChartError};
 pub use money::{Currency, Money, MoneyError, Usd};
