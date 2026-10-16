@@ -17,6 +17,39 @@ pub trait Currency: Copy + Clone + fmt::Debug + PartialEq + Eq + PartialOrd + Or
 
     /// How many digits of minor units make up one major unit: 2 for US dollars
     /// (100 cents), 0 for the yen. ISO 4217 calls this the "minor unit".
+    ///
+    /// At most 19, the most digits an `i64` amount can have. Displaying a
+    /// currency that declares more is a compile error:
+    ///
+    /// ```
+    /// use ledger::{Currency, Money};
+    ///
+    /// #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    /// struct Fine;
+    ///
+    /// impl Currency for Fine {
+    ///     const CODE: &'static str = "XFN";
+    ///     const DECIMAL_PLACES: u32 = 19;
+    /// }
+    ///
+    /// let one = Money::<Fine>::from_minor_units(1);
+    /// assert_eq!(one.to_string(), "0.0000000000000000001 XFN");
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use ledger::{Currency, Money};
+    ///
+    /// #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    /// struct TooFine;
+    ///
+    /// impl Currency for TooFine {
+    ///     const CODE: &'static str = "XTF";
+    ///     const DECIMAL_PLACES: u32 = 20;
+    /// }
+    ///
+    /// let one = Money::<TooFine>::from_minor_units(1);
+    /// let _ = one.to_string();
+    /// ```
     const DECIMAL_PLACES: u32;
 }
 
@@ -135,6 +168,15 @@ impl<C: Currency> fmt::Debug for Money<C> {
 /// number of decimal places come from `C`.
 impl<C: Currency> fmt::Display for Money<C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Checked when the compiler generates this code for a specific `C`, so
+        // a currency with too many decimal places fails the build instead of
+        // overflowing `10_u64.pow` at runtime.
+        const {
+            assert!(
+                C::DECIMAL_PLACES <= 19,
+                "a currency can have at most 19 decimal places"
+            )
+        };
         // The sign is written separately: for -5 cents the whole part is 0,
         // and an integer can't be -0. `unsigned_abs` (not `abs`) because
         // `i64::MIN` has no positive `i64` counterpart.

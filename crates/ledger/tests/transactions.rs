@@ -35,11 +35,11 @@ fn september_30() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 9, 30, 15, 0, 0).unwrap()
 }
 
-/// The charge's first two entries: $21.60 debited to Payment Provider
-/// Clearing, $20.00 credited to Deferred Revenue: Subscriptions.
 const CUSTOMER_42: PlaygroundTag = Customer(CustomerId(42));
 const SUBSCRIPTION_9: PlaygroundTag = Subscription(SubscriptionId(9));
 
+/// The charge's first two entries: $21.60 debited to Payment Provider
+/// Clearing, $20.00 credited to Deferred Revenue: Subscriptions.
 fn charge_without_tax() -> TransactionBuilder<Usd, PlaygroundTag> {
     UnpostedTransaction::builder(september_30(), "Customer 42 buys Pro monthly")
         .debit(
