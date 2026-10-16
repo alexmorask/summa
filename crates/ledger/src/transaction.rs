@@ -123,12 +123,20 @@ impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
         self.entries.as_slice()
     }
 
-    /// Posts the transaction: stamps the time the ledger recorded it.
+    /// Posts the transaction into a ledger with this `chart`: stamps the time
+    /// the ledger recorded it.
     ///
-    /// This is the authoritative time check: nothing may be recorded as
-    /// having happened after it was written down, so `effective_at` must not
-    /// be after `recorded_at`. `build`'s check against `now` is early feedback
-    /// for the caller.
+    /// The rules about the transaction itself (balance, positive amounts, two
+    /// or more entries, no repeated tag kind) held at `build` and can't stop
+    /// holding, because the transaction can't change. The rules about its
+    /// surroundings are checked again here, against the ledger's own clock
+    /// and chart; `build`'s checks against the caller's `now` and chart are
+    /// early feedback. In order:
+    ///
+    /// 1. Nothing may be recorded as having happened after it was written
+    ///    down, so `effective_at` must not be after `recorded_at`.
+    /// 2. Every entry's account must be in the ledger's chart, which may not
+    ///    be the chart the transaction was built against.
     ///
     /// Private to the ledger crate, so no other crate can post or choose a
     /// recorded time. Ledger storage calls it from M2 (SUM-9); until then only
@@ -139,13 +147,22 @@ impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
     )]
     pub(crate) fn post(
         self,
+        chart: &Chart,
         recorded_at: DateTime<Utc>,
-    ) -> Result<PostedTransaction<C, T>, TransactionError<C>> {
+    ) -> Result<PostedTransaction<C, T>, PostError> {
         if self.effective_at > recorded_at {
-            return Err(TransactionError::EffectiveAfterRecorded {
+            return Err(PostError::EffectiveAfterRecorded {
                 effective_at: self.effective_at,
                 recorded_at,
             });
+        }
+        for (index, entry) in self.entries.iter().enumerate() {
+            if chart.get(entry.account).is_none() {
+                return Err(PostError::UnknownAccount {
+                    entry: index,
+                    account: entry.account,
+                });
+            }
         }
         Ok(PostedTransaction {
             transaction: self,
@@ -225,7 +242,7 @@ impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
 ///     .credit(sales, amount, [ExampleTag::Customer(42)])
 ///     .build(&chart, now)
 ///     .unwrap();
-/// let _posted = unposted.post(now);
+/// let _posted = unposted.post(&chart, now);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PostedTransaction<C: Currency, T: Tag> {
@@ -374,8 +391,8 @@ fn total<C: Currency, T: Tag>(
         .map_err(|MoneyError::Overflow| TransactionError::Overflow)
 }
 
-/// Why a transaction was rejected. `entry` is the entry's 0-based position;
-/// messages show it 1-based.
+/// Why `build` rejected a transaction. `entry` is the entry's 0-based
+/// position; messages show it 1-based.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TransactionError<C: Currency> {
     /// Fewer than two entries.
@@ -399,11 +416,6 @@ pub enum TransactionError<C: Currency> {
     Overflow,
     /// Total debits don't equal total credits.
     Unbalanced { debits: Money<C>, credits: Money<C> },
-    /// `post` was given a recorded time before the effective time.
-    EffectiveAfterRecorded {
-        effective_at: DateTime<Utc>,
-        recorded_at: DateTime<Utc>,
-    },
 }
 
 impl<C: Currency> fmt::Display for TransactionError<C> {
@@ -438,7 +450,33 @@ impl<C: Currency> fmt::Display for TransactionError<C> {
             TransactionError::Unbalanced { debits, credits } => {
                 write!(f, "debits {debits} ≠ credits {credits}")
             }
-            TransactionError::EffectiveAfterRecorded {
+        }
+    }
+}
+
+impl<C: Currency> std::error::Error for TransactionError<C> {}
+
+/// Why `post` rejected a transaction. Separate from [`TransactionError`] so
+/// each step's error type lists only what that step can return. `entry` is the
+/// entry's 0-based position; messages show it 1-based.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PostError {
+    /// The recorded time is before the effective time.
+    EffectiveAfterRecorded {
+        effective_at: DateTime<Utc>,
+        recorded_at: DateTime<Utc>,
+    },
+    /// An entry's account isn't in the ledger's chart.
+    UnknownAccount {
+        entry: usize,
+        account: AccountNumber,
+    },
+}
+
+impl fmt::Display for PostError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PostError::EffectiveAfterRecorded {
                 effective_at,
                 recorded_at,
             } => write!(
@@ -447,11 +485,17 @@ impl<C: Currency> fmt::Display for TransactionError<C> {
                 utc(*effective_at),
                 utc(*recorded_at)
             ),
+            PostError::UnknownAccount { entry, account } => write!(
+                f,
+                "entry {}: account {} is not in the ledger's chart",
+                entry + 1,
+                account.get()
+            ),
         }
     }
 }
 
-impl<C: Currency> std::error::Error for TransactionError<C> {}
+impl std::error::Error for PostError {}
 
 /// RFC 3339 in UTC with a `Z`, showing fractional seconds only when present.
 fn utc(time: DateTime<Utc>) -> String {
@@ -873,11 +917,21 @@ mod tests {
 
     // --- Posting ---
 
+    /// The ledger's chart at posting time: the test chart without the
+    /// revenue account.
+    fn chart_without_revenue() -> Chart {
+        Chart::new([
+            Account::new(ASSET, "Asset", AccountType::Asset),
+            Account::new(LIABILITY, "Liability", AccountType::Liability),
+        ])
+        .unwrap()
+    }
+
     #[test]
     fn post_stamps_the_recorded_time_and_keeps_everything_else() {
         let unposted = balanced().build(&chart(), noon()).unwrap();
         let recorded_at = noon() + TimeDelta::days(2);
-        let posted = unposted.clone().post(recorded_at).unwrap();
+        let posted = unposted.clone().post(&chart(), recorded_at).unwrap();
         assert_eq!(posted.recorded_at(), recorded_at);
         assert_eq!(posted.effective_at(), unposted.effective_at());
         assert_eq!(posted.description(), unposted.description());
@@ -887,7 +941,7 @@ mod tests {
     #[test]
     fn post_accepts_a_recorded_time_equal_to_the_effective_time() {
         let unposted = balanced().build(&chart(), noon()).unwrap();
-        assert!(unposted.post(noon()).is_ok());
+        assert!(unposted.post(&chart(), noon()).is_ok());
     }
 
     #[test]
@@ -895,8 +949,8 @@ mod tests {
         let unposted = balanced().build(&chart(), noon()).unwrap();
         let earlier = noon() - TimeDelta::seconds(1);
         assert_eq!(
-            unposted.post(earlier),
-            Err(TransactionError::EffectiveAfterRecorded {
+            unposted.post(&chart(), earlier),
+            Err(PostError::EffectiveAfterRecorded {
                 effective_at: noon(),
                 recorded_at: earlier,
             })
@@ -904,14 +958,46 @@ mod tests {
     }
 
     #[test]
-    fn effective_after_recorded_explains_itself() {
-        let error = TransactionError::<Usd>::EffectiveAfterRecorded {
+    fn post_rejects_an_account_missing_from_the_ledgers_chart() {
+        // Built against a chart with the revenue account; posted into a
+        // ledger whose chart doesn't have it.
+        let unposted = balanced().build(&chart(), noon()).unwrap();
+        assert_eq!(
+            unposted.post(&chart_without_revenue(), noon()),
+            Err(PostError::UnknownAccount {
+                entry: 1,
+                account: REVENUE,
+            })
+        );
+    }
+
+    #[test]
+    fn post_checks_the_time_before_the_accounts() {
+        let unposted = balanced().build(&chart(), noon()).unwrap();
+        let earlier = noon() - TimeDelta::seconds(1);
+        assert!(matches!(
+            unposted.post(&chart_without_revenue(), earlier),
+            Err(PostError::EffectiveAfterRecorded { .. })
+        ));
+    }
+
+    #[test]
+    fn post_errors_explain_themselves() {
+        let late = PostError::EffectiveAfterRecorded {
             effective_at: Utc.with_ymd_and_hms(2026, 10, 17, 0, 0, 0).unwrap(),
             recorded_at: noon(),
         };
         assert_eq!(
-            error.to_string(),
+            late.to_string(),
             "effective time 2026-10-17T00:00:00Z is after recorded time (2026-10-16T12:00:00Z)"
+        );
+        let unknown = PostError::UnknownAccount {
+            entry: 1,
+            account: AccountNumber::new(3),
+        };
+        assert_eq!(
+            unknown.to_string(),
+            "entry 2: account 3 is not in the ledger's chart"
         );
     }
 

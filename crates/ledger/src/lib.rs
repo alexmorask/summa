@@ -12,5 +12,5 @@ pub use chart::{Chart, ChartError};
 pub use money::{Currency, Money, MoneyError, Usd};
 pub use tag::Tag;
 pub use transaction::{
-    Entry, PostedTransaction, TransactionBuilder, TransactionError, UnpostedTransaction,
+    Entry, PostError, PostedTransaction, TransactionBuilder, TransactionError, UnpostedTransaction,
 };

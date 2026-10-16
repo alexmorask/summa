@@ -19,7 +19,7 @@ If the ledger defined either one, every business would have to edit the ledger t
 **The ledger defines what a tag and an account are. The business supplies which ones exist.**
 
 - **Tag kinds come from the business and are checked at compile time.** The ledger defines a `Tag` trait (`fn kind(&self) -> &'static str`) and is generic over it. The business implements it on its own enum: one variant per kind, each carrying a typed value, like `Customer(CustomerId)`. A misspelled variant doesn't compile, and a subscription ID can't be passed where a customer ID belongs. The kind strings `kind` returns aren't checked by the compiler, so each variant must return its own kind.
-- **The chart is passed in and checked at runtime.** The caller gives the ledger a `Chart` when building a transaction, the same way it gives `now` (ADR 0003). Entries hold an `AccountNumber`, which is looked up in the chart; an entry whose number isn't there is rejected.
+- **The chart is passed in and checked at runtime.** The caller gives the ledger a `Chart` when building a transaction, the same way it gives `now` (ADR 0003). Entries hold an `AccountNumber`, which is looked up in the chart; an entry whose number isn't there is rejected. Posting checks the accounts again, against the ledger's own chart, because a transaction doesn't remember which chart it was built against.
 - **An account's identity is its number.** The chart holds the only copy of each account and rejects two accounts with the same number. Renaming an account changes the chart's copy and no entry.
 
 ## Alternatives considered
