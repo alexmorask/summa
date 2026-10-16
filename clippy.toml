@@ -1,3 +1,5 @@
 disallowed-methods = [
     { path = "std::time::SystemTime::now", reason = "Time is an input (ADR 0003): take `now` as a parameter or use the injected clock." },
+    { path = "chrono::Utc::now", allow-invalid = true, reason = "Time is an input (ADR 0003): take `now` as a parameter or use the injected clock." },
+    { path = "chrono::Local::now", allow-invalid = true, reason = "Time is an input (ADR 0003): take `now` as a parameter or use the injected clock." },
 ]

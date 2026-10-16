@@ -4,7 +4,11 @@
 mod account;
 mod chart;
 mod money;
+mod tag;
+mod transaction;
 
 pub use account::{Account, AccountNumber, AccountType, Permanence, Side};
 pub use chart::{Chart, ChartError};
 pub use money::{Currency, Money, MoneyError, Usd};
+pub use tag::Tag;
+pub use transaction::{Entry, TransactionBuilder, TransactionError, UnpostedTransaction};
