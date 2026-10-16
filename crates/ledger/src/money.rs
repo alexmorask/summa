@@ -47,8 +47,8 @@ pub trait Currency: Copy + Clone + fmt::Debug + PartialEq + Eq + PartialOrd + Or
     ///     const DECIMAL_PLACES: u32 = 20;
     /// }
     ///
-    /// let one = Money::<TooFine>::from_minor_units(1);
-    /// let _ = one.to_string();
+    /// // Creating the amount is enough to fail; it never has to be displayed.
+    /// let _one = Money::<TooFine>::from_minor_units(1);
     /// ```
     const DECIMAL_PLACES: u32;
 }
@@ -134,6 +134,16 @@ pub struct Money<C: Currency> {
 impl<C: Currency> Money<C> {
     /// An amount of `minor_units` in currency `C`.
     pub const fn from_minor_units(minor_units: i64) -> Self {
+        // Checked when the compiler generates this code for a specific `C`.
+        // Every amount is created here, so a currency with too many decimal
+        // places fails the build, instead of overflowing `10_u64.pow` when an
+        // amount is displayed.
+        const {
+            assert!(
+                C::DECIMAL_PLACES <= 19,
+                "a currency can have at most 19 decimal places"
+            )
+        };
         Self {
             minor_units,
             currency: PhantomData,
@@ -168,15 +178,6 @@ impl<C: Currency> fmt::Debug for Money<C> {
 /// number of decimal places come from `C`.
 impl<C: Currency> fmt::Display for Money<C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Checked when the compiler generates this code for a specific `C`, so
-        // a currency with too many decimal places fails the build instead of
-        // overflowing `10_u64.pow` at runtime.
-        const {
-            assert!(
-                C::DECIMAL_PLACES <= 19,
-                "a currency can have at most 19 decimal places"
-            )
-        };
         // The sign is written separately: for -5 cents the whole part is 0,
         // and an integer can't be -0. `unsigned_abs` (not `abs`) because
         // `i64::MIN` has no positive `i64` counterpart.

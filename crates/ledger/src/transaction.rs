@@ -375,7 +375,8 @@ fn repeated_kind<T: Tag>(tags: &[T]) -> Option<&'static str> {
     tags.iter().map(Tag::kind).find(|&kind| !seen.insert(kind))
 }
 
-/// The sum of the amounts on one side, or `Overflow` if it doesn't fit.
+/// The sum of the amounts on one side, or `Overflow` naming that side if it
+/// doesn't fit.
 fn total<C: Currency, T: Tag>(
     entries: &[Entry<C, T>],
     side: Side,
@@ -388,7 +389,7 @@ fn total<C: Currency, T: Tag>(
         })
         // `MoneyError` has one variant, so this pattern is exhaustive; a new
         // variant would make it a compile error here.
-        .map_err(|MoneyError::Overflow| TransactionError::Overflow)
+        .map_err(|MoneyError::Overflow| TransactionError::Overflow { side })
 }
 
 /// Why `build` rejected a transaction. `entry` is the entry's 0-based
@@ -412,8 +413,9 @@ pub enum TransactionError<C: Currency> {
     /// An entry has two tags of the same kind, which would count its amount
     /// twice in that kind's balances.
     DuplicateTagKind { entry: usize, kind: &'static str },
-    /// Total debits or total credits don't fit in an `i64` of minor units.
-    Overflow,
+    /// The total on `side` doesn't fit in an `i64` of minor units. Debits are
+    /// totalled first.
+    Overflow { side: Side },
     /// Total debits don't equal total credits.
     Unbalanced { debits: Money<C>, credits: Money<C> },
 }
@@ -444,8 +446,12 @@ impl<C: Currency> fmt::Display for TransactionError<C> {
             TransactionError::DuplicateTagKind { entry, kind } => {
                 write!(f, "entry {}: more than one {kind} tag", entry + 1)
             }
-            TransactionError::Overflow => {
-                f.write_str("total debits or credits are too large for the ledger to hold")
+            TransactionError::Overflow { side } => {
+                let side = match side {
+                    Side::Debit => "debits",
+                    Side::Credit => "credits",
+                };
+                write!(f, "total {side} are too large for the ledger to hold")
             }
             TransactionError::Unbalanced { debits, credits } => {
                 write!(f, "debits {debits} ≠ credits {credits}")
@@ -772,13 +778,43 @@ mod tests {
     }
 
     #[test]
-    fn rejects_totals_that_overflow() {
+    fn rejects_debits_that_overflow() {
         let result = builder()
             .debit(ASSET, usd(i64::MAX), [])
             .debit(ASSET, usd(1), [])
             .credit(REVENUE, usd(1), [])
             .build(&chart(), noon());
-        assert_eq!(result, Err(TransactionError::Overflow));
+        assert_eq!(
+            result,
+            Err(TransactionError::Overflow { side: Side::Debit })
+        );
+    }
+
+    #[test]
+    fn rejects_credits_that_overflow() {
+        let result = builder()
+            .debit(ASSET, usd(1), [])
+            .credit(REVENUE, usd(i64::MAX), [])
+            .credit(REVENUE, usd(1), [])
+            .build(&chart(), noon());
+        assert_eq!(
+            result,
+            Err(TransactionError::Overflow { side: Side::Credit })
+        );
+    }
+
+    #[test]
+    fn debits_are_totalled_before_credits() {
+        let result = builder()
+            .debit(ASSET, usd(i64::MAX), [])
+            .debit(ASSET, usd(1), [])
+            .credit(REVENUE, usd(i64::MAX), [])
+            .credit(REVENUE, usd(1), [])
+            .build(&chart(), noon());
+        assert_eq!(
+            result,
+            Err(TransactionError::Overflow { side: Side::Debit })
+        );
     }
 
     #[test]
@@ -835,6 +871,21 @@ mod tests {
     }
 
     #[test]
+    fn within_an_entry_the_amount_is_checked_before_the_tags() {
+        let result = builder()
+            .debit(ASSET, usd(0), [TestTag::Alpha(1), TestTag::Alpha(2)])
+            .credit(REVENUE, usd(1), [])
+            .build(&chart(), noon());
+        assert_eq!(
+            result,
+            Err(TransactionError::NonPositiveAmount {
+                entry: 0,
+                amount: usd(0),
+            })
+        );
+    }
+
+    #[test]
     fn within_an_entry_the_account_is_checked_first() {
         let result = builder()
             .debit(NOT_IN_CHART, usd(0), [TestTag::Alpha(1), TestTag::Alpha(2)])
@@ -865,7 +916,7 @@ mod tests {
 
     #[test]
     fn every_rejection_explains_itself() {
-        let cases: [(TransactionError<Usd>, &str); 7] = [
+        let cases: [(TransactionError<Usd>, &str); 8] = [
             (
                 TransactionError::TooFewEntries { count: 1 },
                 "a transaction needs at least 2 entries, got 1",
@@ -899,8 +950,12 @@ mod tests {
                 "entry 1: more than one alpha tag",
             ),
             (
-                TransactionError::Overflow,
-                "total debits or credits are too large for the ledger to hold",
+                TransactionError::Overflow { side: Side::Debit },
+                "total debits are too large for the ledger to hold",
+            ),
+            (
+                TransactionError::Overflow { side: Side::Credit },
+                "total credits are too large for the ledger to hold",
             ),
             (
                 TransactionError::Unbalanced {
@@ -1062,6 +1117,8 @@ mod tests {
         NonPositiveAmount(prop::sample::Index, i64),
         RepeatedTagKind(prop::sample::Index),
         AddToOneAmount(prop::sample::Index, i64),
+        SetOneAmountToTheMaximum(prop::sample::Index),
+        EffectiveTimeAfterNow(i64),
     }
 
     fn any_corruption() -> impl Strategy<Value = Corruption> {
@@ -1074,13 +1131,17 @@ mod tests {
             any::<prop::sample::Index>().prop_map(Corruption::RepeatedTagKind),
             (any::<prop::sample::Index>(), 1_i64..=1_000)
                 .prop_map(|(i, cents)| Corruption::AddToOneAmount(i, cents)),
+            any::<prop::sample::Index>().prop_map(Corruption::SetOneAmountToTheMaximum),
+            // Up to a year late, to the second.
+            (1_i64..=31_536_000).prop_map(Corruption::EffectiveTimeAfterNow),
         ]
     }
 
     /// Applies the corruption and returns the error `build` must report, or
-    /// `None` if the entries are still valid.
+    /// `None` if the transaction is still valid.
     fn corrupt(
         entries: &mut Vec<TestEntry>,
+        effective_at: &mut DateTime<Utc>,
         corruption: &Corruption,
     ) -> Option<TransactionError<Usd>> {
         match corruption {
@@ -1126,16 +1187,51 @@ mod tests {
                     credits: usd(total(Side::Credit)),
                 })
             }
+            Corruption::SetOneAmountToTheMaximum(index) => {
+                let entry = index.index(entries.len());
+                entries[entry].2 = i64::MAX;
+                // The exact totals, in `i128` where they can't overflow.
+                let total = |side: Side| -> i128 {
+                    entries
+                        .iter()
+                        .filter(|e| e.1 == side)
+                        .map(|e| i128::from(e.2))
+                        .sum()
+                };
+                let (debits, credits) = (total(Side::Debit), total(Side::Credit));
+                let max = i128::from(i64::MAX);
+                Some(if debits > max {
+                    TransactionError::Overflow { side: Side::Debit }
+                } else if credits > max {
+                    TransactionError::Overflow { side: Side::Credit }
+                } else {
+                    TransactionError::Unbalanced {
+                        debits: usd(i64::try_from(debits).unwrap()),
+                        credits: usd(i64::try_from(credits).unwrap()),
+                    }
+                })
+            }
+            Corruption::EffectiveTimeAfterNow(seconds) => {
+                *effective_at = noon() + TimeDelta::seconds(*seconds);
+                Some(TransactionError::EffectiveTimeInFuture {
+                    effective_at: *effective_at,
+                    now: noon(),
+                })
+            }
         }
     }
 
+    /// Builds the entries into a transaction effective at `effective_at`,
+    /// with `now` at noon.
     fn build_entries(
         entries: &[TestEntry],
+        effective_at: DateTime<Utc>,
     ) -> Result<UnpostedTransaction<Usd, TestTag>, TransactionError<Usd>> {
+        let start = UnpostedTransaction::builder(effective_at, "Test");
         entries
             .iter()
             .cloned()
-            .fold(builder(), |b, (account, side, cents, tags)| match side {
+            .fold(start, |b, (account, side, cents, tags)| match side {
                 Side::Debit => b.debit(account, usd(cents), tags),
                 Side::Credit => b.credit(account, usd(cents), tags),
             })
@@ -1155,8 +1251,9 @@ mod tests {
             mut entries in valid_entries(),
             corruption in any_corruption(),
         ) {
-            let expected = corrupt(&mut entries, &corruption);
-            let result = build_entries(&entries);
+            let mut effective_at = noon();
+            let expected = corrupt(&mut entries, &mut effective_at, &corruption);
+            let result = build_entries(&entries, effective_at);
             match expected {
                 Some(error) => prop_assert_eq!(result, Err(error)),
                 None => {

@@ -108,9 +108,13 @@ fn sales_tax_payable_is_not_in_the_playground_chart() {
     );
 }
 
+/// `Tag::kind` must return a different kind for each variant, and nothing
+/// enforces it. This is the check a business crate should copy for its own
+/// tag type.
 #[test]
-fn playground_tags_name_their_kinds() {
+fn playground_tag_kinds_are_distinct() {
     use ledger::Tag;
     assert_eq!(CUSTOMER_42.kind(), "customer");
     assert_eq!(SUBSCRIPTION_9.kind(), "subscription");
+    assert_ne!(CUSTOMER_42.kind(), SUBSCRIPTION_9.kind());
 }
