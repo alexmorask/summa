@@ -850,9 +850,9 @@ mod tests {
             (
                 TransactionError::DuplicateTagKind {
                     entry: 0,
-                    kind: "customer",
+                    kind: "alpha",
                 },
-                "entry 1: more than one customer tag",
+                "entry 1: more than one alpha tag",
             ),
             (
                 TransactionError::Overflow,
@@ -917,29 +917,13 @@ mod tests {
 
     // --- Rules that must always hold ---
 
-    /// Any tag, from a small range of values so kinds repeat often.
-    fn any_tag() -> impl Strategy<Value = TestTag> {
-        prop_oneof![
-            (0_u64..3).prop_map(TestTag::Alpha),
-            (0_u64..3).prop_map(TestTag::Beta),
-        ]
-    }
-
-    /// Any entry: an account (4 isn't in the chart), a side, an amount
-    /// including zero and negatives, and up to two tags. Amounts come from a
-    /// narrow range so random entries balance often and the `Ok` branch of the
-    /// property below is well exercised.
-    fn any_entry() -> impl Strategy<Value = (u32, bool, i64, Vec<TestTag>)> {
-        (
-            1_u32..=4,
-            any::<bool>(),
-            -2_i64..=5,
-            prop::collection::vec(any_tag(), 0..3),
-        )
-    }
+    /// An entry before it's added to a builder: account, side, amount in
+    /// cents, tags.
+    type TestEntry = (AccountNumber, Side, i64, Vec<TestTag>);
 
     /// One balanced group of entries: a debit of `x` and a credit of `x`, or a
-    /// debit of `x + y` split into credits of `x` and `y`.
+    /// debit of `x + y` split into credits of `x` and `y`. The last two values
+    /// are the debit and credit account numbers, both in the chart.
     fn balanced_group() -> impl Strategy<Value = (i64, Option<i64>, u32, u32)> {
         (
             1_i64..=1_000_000,
@@ -949,72 +933,166 @@ mod tests {
         )
     }
 
-    proptest! {
-        /// No transaction that can be built breaks a rule: whenever `build`
-        /// succeeds, there are at least two entries, every account is in the
-        /// chart, every amount is positive, no entry repeats a tag kind, and
-        /// debits equal credits (summed in `i128`, where they can't overflow).
-        #[test]
-        fn no_buildable_transaction_breaks_a_rule(
-            entries in prop::collection::vec(any_entry(), 0..6),
-        ) {
-            let mut b = builder();
-            for (number, is_debit, cents, tags) in entries {
-                let account = AccountNumber::new(number);
-                b = if is_debit {
-                    b.debit(account, usd(cents), tags)
-                } else {
-                    b.credit(account, usd(cents), tags)
-                };
-            }
-            let chart = chart();
-            if let Ok(t) = b.build(&chart, noon()) {
-                prop_assert!(t.entries().len() >= 2);
-                prop_assert!(t.entries().iter().all(|e| chart.get(e.account()).is_some()));
-                prop_assert!(t.entries().iter().all(|e| e.amount().minor_units() > 0));
-                for e in t.entries() {
-                    let kinds: HashSet<&str> = e.tags().iter().map(Tag::kind).collect();
-                    prop_assert_eq!(kinds.len(), e.tags().len());
+    /// A valid transaction's entries: one to three balanced groups, every
+    /// entry carrying the same tags, at most one of each kind.
+    fn valid_entries() -> impl Strategy<Value = Vec<TestEntry>> {
+        (
+            prop::collection::vec(balanced_group(), 1..4),
+            prop::option::of(0_u64..100),
+            prop::option::of(0_u64..100),
+        )
+            .prop_map(|(groups, alpha, beta)| {
+                let tags: Vec<TestTag> = alpha
+                    .map(TestTag::Alpha)
+                    .into_iter()
+                    .chain(beta.map(TestTag::Beta))
+                    .collect();
+                let mut entries = Vec::new();
+                for (x, y, debit, credit) in groups {
+                    let (debit, credit) = (AccountNumber::new(debit), AccountNumber::new(credit));
+                    match y {
+                        None => {
+                            entries.push((debit, Side::Debit, x, tags.clone()));
+                            entries.push((credit, Side::Credit, x, tags.clone()));
+                        }
+                        Some(y) => {
+                            entries.push((debit, Side::Debit, x + y, tags.clone()));
+                            entries.push((credit, Side::Credit, x, tags.clone()));
+                            entries.push((credit, Side::Credit, y, tags.clone()));
+                        }
+                    }
                 }
-                let sum = |side: Side| -> i128 {
-                    t.entries()
-                        .iter()
-                        .filter(|e| e.side() == side)
-                        .map(|e| i128::from(e.amount().minor_units()))
-                        .sum()
+                entries
+            })
+    }
+
+    /// At most one thing wrong with a valid transaction. `Index` picks which
+    /// entry, whatever the number of entries turns out to be.
+    #[derive(Clone, Debug)]
+    enum Corruption {
+        None,
+        KeepOnlyOneEntry,
+        UnknownAccount(prop::sample::Index),
+        NonPositiveAmount(prop::sample::Index, i64),
+        RepeatedTagKind(prop::sample::Index),
+        AddToOneAmount(prop::sample::Index, i64),
+    }
+
+    fn any_corruption() -> impl Strategy<Value = Corruption> {
+        prop_oneof![
+            Just(Corruption::None),
+            Just(Corruption::KeepOnlyOneEntry),
+            any::<prop::sample::Index>().prop_map(Corruption::UnknownAccount),
+            (any::<prop::sample::Index>(), -1_000_i64..=0)
+                .prop_map(|(i, cents)| Corruption::NonPositiveAmount(i, cents)),
+            any::<prop::sample::Index>().prop_map(Corruption::RepeatedTagKind),
+            (any::<prop::sample::Index>(), 1_i64..=1_000)
+                .prop_map(|(i, cents)| Corruption::AddToOneAmount(i, cents)),
+        ]
+    }
+
+    /// Applies the corruption and returns the error `build` must report, or
+    /// `None` if the entries are still valid.
+    fn corrupt(
+        entries: &mut Vec<TestEntry>,
+        corruption: &Corruption,
+    ) -> Option<TransactionError<Usd>> {
+        match corruption {
+            Corruption::None => None,
+            Corruption::KeepOnlyOneEntry => {
+                entries.truncate(1);
+                Some(TransactionError::TooFewEntries { count: 1 })
+            }
+            Corruption::UnknownAccount(index) => {
+                let entry = index.index(entries.len());
+                entries[entry].0 = NOT_IN_CHART;
+                Some(TransactionError::UnknownAccount {
+                    entry,
+                    account: NOT_IN_CHART,
+                })
+            }
+            Corruption::NonPositiveAmount(index, cents) => {
+                let entry = index.index(entries.len());
+                entries[entry].2 = *cents;
+                Some(TransactionError::NonPositiveAmount {
+                    entry,
+                    amount: usd(*cents),
+                })
+            }
+            Corruption::RepeatedTagKind(index) => {
+                let entry = index.index(entries.len());
+                // The repeated kind isn't next to its twin, so a check that
+                // only compares neighbours would miss it.
+                entries[entry].3 = vec![TestTag::Alpha(1), TestTag::Beta(1), TestTag::Alpha(2)];
+                Some(TransactionError::DuplicateTagKind {
+                    entry,
+                    kind: "alpha",
+                })
+            }
+            Corruption::AddToOneAmount(index, cents) => {
+                let entry = index.index(entries.len());
+                entries[entry].2 += cents;
+                let total = |side: Side| -> i64 {
+                    entries.iter().filter(|e| e.1 == side).map(|e| e.2).sum()
                 };
-                prop_assert_eq!(sum(Side::Debit), sum(Side::Credit));
+                Some(TransactionError::Unbalanced {
+                    debits: usd(total(Side::Debit)),
+                    credits: usd(total(Side::Credit)),
+                })
             }
         }
+    }
 
-        /// Every valid transaction builds. Without this, the property above
-        /// could pass by rejecting everything.
+    fn build_entries(
+        entries: &[TestEntry],
+    ) -> Result<UnpostedTransaction<Usd, TestTag>, TransactionError<Usd>> {
+        entries
+            .iter()
+            .cloned()
+            .fold(builder(), |b, (account, side, cents, tags)| match side {
+                Side::Debit => b.debit(account, usd(cents), tags),
+                Side::Credit => b.credit(account, usd(cents), tags),
+            })
+            .build(&chart(), noon())
+    }
+
+    proptest! {
+        /// A transaction builds only if it follows every rule, and a broken
+        /// one is rejected for the rule it breaks. Starts from a valid
+        /// transaction and breaks at most one rule, so both outcomes are
+        /// common. When it builds: at least two entries, every account in the
+        /// chart, every amount positive, no repeated tag kind on an entry, and
+        /// debits equal to credits (summed in `i128`, where they can't
+        /// overflow).
         #[test]
-        fn every_valid_transaction_builds(
-            groups in prop::collection::vec(balanced_group(), 1..4),
-            alpha in prop::option::of(0_u64..100),
-            beta in prop::option::of(0_u64..100),
+        fn builds_only_valid_transactions_and_names_what_is_wrong(
+            mut entries in valid_entries(),
+            corruption in any_corruption(),
         ) {
-            let tags: Vec<TestTag> = alpha
-                .map(TestTag::Alpha)
-                .into_iter()
-                .chain(beta.map(TestTag::Beta))
-                .collect();
-            let mut b = builder();
-            for (x, y, debit, credit) in groups {
-                let (debit, credit) = (AccountNumber::new(debit), AccountNumber::new(credit));
-                b = match y {
-                    None => b
-                        .debit(debit, usd(x), tags.clone())
-                        .credit(credit, usd(x), tags.clone()),
-                    Some(y) => b
-                        .debit(debit, usd(x + y), tags.clone())
-                        .credit(credit, usd(x), tags.clone())
-                        .credit(credit, usd(y), tags.clone()),
-                };
+            let expected = corrupt(&mut entries, &corruption);
+            let result = build_entries(&entries);
+            match expected {
+                Some(error) => prop_assert_eq!(result, Err(error)),
+                None => {
+                    let t = result.map_err(|e| TestCaseError::fail(e.to_string()))?;
+                    let chart = chart();
+                    prop_assert!(t.entries().len() >= 2);
+                    prop_assert!(t.entries().iter().all(|e| chart.get(e.account()).is_some()));
+                    prop_assert!(t.entries().iter().all(|e| e.amount().minor_units() > 0));
+                    for e in t.entries() {
+                        let kinds: HashSet<&str> = e.tags().iter().map(Tag::kind).collect();
+                        prop_assert_eq!(kinds.len(), e.tags().len());
+                    }
+                    let sum = |side: Side| -> i128 {
+                        t.entries()
+                            .iter()
+                            .filter(|e| e.side() == side)
+                            .map(|e| i128::from(e.amount().minor_units()))
+                            .sum()
+                    };
+                    prop_assert_eq!(sum(Side::Debit), sum(Side::Credit));
+                }
             }
-            let result = b.build(&chart(), noon());
-            prop_assert!(result.is_ok(), "rejected: {:?}", result);
         }
     }
 }

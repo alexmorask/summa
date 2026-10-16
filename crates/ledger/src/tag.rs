@@ -6,8 +6,9 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 /// A tag on an entry. The business implements this on its own enum: one
-/// variant per tag kind, each carrying a typed value. A misspelled kind is a
-/// variant that doesn't exist, so it doesn't compile.
+/// variant per tag kind, each carrying a typed value. A misspelled variant
+/// doesn't exist, so it doesn't compile. The strings `kind` returns are
+/// ordinary strings, though: the compiler doesn't check those.
 ///
 /// `Hash` lets balances be grouped by tag.
 ///
@@ -57,7 +58,12 @@ use std::hash::Hash;
 /// assert_eq!(tag.kind(), "customer");
 /// ```
 pub trait Tag: Clone + Eq + Hash + Debug {
-    /// The tag's kind, like `"customer"`. Every value of one variant returns
-    /// the same kind, and different variants return different kinds.
+    /// The tag's kind, like `"customer"`.
+    ///
+    /// Implementations must return the same kind for every value of a variant,
+    /// and a different kind for each variant. Nothing enforces this; the
+    /// duplicate-kind check depends on it. Two variants sharing a kind are
+    /// wrongly rejected as duplicates, and one variant with several kinds lets
+    /// real duplicates through.
     fn kind(&self) -> &'static str;
 }

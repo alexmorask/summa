@@ -18,7 +18,7 @@ If the ledger defined either one, every business would have to edit the ledger t
 
 **The ledger defines what a tag and an account are. The business supplies which ones exist.**
 
-- **Tag kinds come from the business and are checked at compile time.** The ledger defines a `Tag` trait (`fn kind(&self) -> &'static str`) and is generic over it. The business implements it on its own enum: one variant per kind, each carrying a typed value, like `Customer(CustomerId)`. A misspelled kind doesn't compile, and a subscription ID can't be passed where a customer ID belongs.
+- **Tag kinds come from the business and are checked at compile time.** The ledger defines a `Tag` trait (`fn kind(&self) -> &'static str`) and is generic over it. The business implements it on its own enum: one variant per kind, each carrying a typed value, like `Customer(CustomerId)`. A misspelled variant doesn't compile, and a subscription ID can't be passed where a customer ID belongs. The kind strings `kind` returns aren't checked by the compiler, so each variant must return its own kind.
 - **The chart is passed in and checked at runtime.** The caller gives the ledger a `Chart` when building a transaction, the same way it gives `now` (ADR 0003). Entries hold an `AccountNumber`, which is looked up in the chart; an entry whose number isn't there is rejected.
 - **An account's identity is its number.** The chart holds the only copy of each account and rejects two accounts with the same number. Renaming an account changes the chart's copy and no entry.
 
@@ -34,9 +34,9 @@ If the ledger defined either one, every business would have to edit the ledger t
 
 - **The tag type is a second type parameter that spreads like currency does:** entries, transactions and balance queries take `<C, T>`.
 - **Tag kinds stored as strings are parsed at the boundary** into the business's tag type in M2, the same way currency codes are (ADR 0004). `Tag::kind` gives the string when saving.
-- **The playground supplies its own tags and chart** in the ledger's tests (`crates/ledger/tests/common/`), so ledger source has no business words.
+- **The playground supplies its own tags and chart** in the ledger's tests (`crates/ledger/tests/common/`), so ledger code defines no business accounts or tag kinds. Doc examples in ledger source use illustrative ones, like a `Customer` tag.
 - **Code that needs an entry's account details,** like its type or normal side, goes through the chart, which is passed in anyway.
 
 ## Correction to ADR 0004
 
-ADR 0004's Consequences say the number of decimal places a currency uses "is added with the first such currency". It's added now instead, as `Currency::DECIMAL_PLACES` (2 for US dollars), because rejection messages show amounts like `21.60 USD`, and formatting needs it. ADR 0004's decision is unchanged.
+ADR 0004's Consequences say a currency will need to state its number of decimal places, and "that's added with the first such currency". It's added now instead, as `Currency::DECIMAL_PLACES` (2 for US dollars), because rejection messages show amounts like `21.60 USD`, and formatting needs it. ADR 0004's decision is unchanged.
