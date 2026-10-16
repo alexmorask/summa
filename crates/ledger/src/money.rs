@@ -18,8 +18,9 @@ pub trait Currency: Copy + Clone + fmt::Debug + PartialEq + Eq + PartialOrd + Or
     /// How many digits of minor units make up one major unit: 2 for US dollars
     /// (100 cents), 0 for the yen. ISO 4217 calls this the "minor unit".
     ///
-    /// At most 19, the most digits an `i64` amount can have. Displaying a
-    /// currency that declares more is a compile error:
+    /// At most 19, so that 10 to that power (the minor units in one major
+    /// unit) fits in a `u64`. Creating an amount in a currency that declares
+    /// more is a compile error:
     ///
     /// ```
     /// use ledger::{Currency, Money};

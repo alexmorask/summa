@@ -75,7 +75,7 @@ fn playground_chart_matches_the_spec() {
 
 #[test]
 fn playground_account_numbers_are_unique() {
-    let chart = [
+    let accounts = [
         CASH,
         PAYMENT_PROVIDER_CLEARING,
         DEFERRED_REVENUE_SUBSCRIPTIONS,
@@ -84,8 +84,8 @@ fn playground_account_numbers_are_unique() {
         DISCOUNTS_AND_REFUNDS,
         PAYMENT_PROCESSING_FEES,
     ];
-    let numbers: HashSet<_> = chart.iter().map(|a| a.number()).collect();
-    assert_eq!(numbers.len(), chart.len());
+    let numbers: HashSet<_> = accounts.iter().map(|a| a.number()).collect();
+    assert_eq!(numbers.len(), accounts.len());
 }
 
 #[test]

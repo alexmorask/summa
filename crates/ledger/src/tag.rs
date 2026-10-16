@@ -10,7 +10,7 @@ use std::hash::Hash;
 /// doesn't exist, so it doesn't compile. The strings `kind` returns are
 /// ordinary strings, though: the compiler doesn't check those.
 ///
-/// `Hash` lets balances be grouped by tag.
+/// `Hash` is required so balance queries can group entries by tag.
 ///
 /// ```
 /// use ledger::Tag;

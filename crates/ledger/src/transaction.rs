@@ -42,7 +42,7 @@ impl<C: Currency, T: Tag> Entry<C, T> {
     }
 }
 
-/// A transaction that passed every check but hasn't been posted: it has an
+/// A transaction that passed every `build` check but hasn't been posted: it has an
 /// effective time (when it happened) but no recorded time yet. The only way to
 /// get one is [`TransactionBuilder::build`].
 ///
@@ -139,8 +139,7 @@ impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
     ///    be the chart the transaction was built against.
     ///
     /// Private to the ledger crate, so no other crate can post or choose a
-    /// recorded time. Ledger storage calls it from M2 (SUM-9); until then only
-    /// tests do.
+    /// recorded time. Ledger storage calls it.
     #[cfg_attr(
         not(test),
         expect(dead_code, reason = "called by ledger storage from M2 (SUM-9)")
@@ -319,11 +318,19 @@ impl<C: Currency, T: Tag> TransactionBuilder<C, T> {
         self
     }
 
-    /// Checks every rule and returns the transaction, or the first problem
-    /// found. The checks run in a fixed order: whole-transaction structure,
-    /// then each entry in the order added, then the totals. An entry problem
-    /// often explains a bad total, and totals only mean something once every
-    /// amount is positive.
+    /// Checks every rule against `chart` (the accounts entries may use) and
+    /// `now` (the caller's current time), and returns the transaction or the
+    /// first problem found. The checks run in this order:
+    ///
+    /// 1. At least two entries.
+    /// 2. The effective time isn't after `now`.
+    /// 3. Each entry, in the order added: its account is in `chart`, then its
+    ///    amount is positive, then no tag kind appears twice on it.
+    /// 4. The totals: debits, then credits, each fit in an `i64`; then debits
+    ///    equal credits.
+    ///
+    /// An entry problem often explains a bad total, and totals only mean
+    /// something once every amount is positive.
     pub fn build(
         self,
         chart: &Chart,
@@ -549,7 +556,8 @@ mod tests {
         Money::from_minor_units(cents)
     }
 
-    /// The fixed "now" every test uses: 2026-10-16 12:00:00 UTC.
+    /// 2026-10-16 12:00:00 UTC: the default effective time and `now`, which
+    /// tests move earlier or later when they need to.
     fn noon() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 10, 16, 12, 0, 0).unwrap()
     }
