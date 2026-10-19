@@ -8,12 +8,50 @@ use std::marker::PhantomData;
 /// A currency, used as a type parameter so amounts in different currencies
 /// can't be mixed (ADR 0004).
 ///
-/// The supertraits guarantee every `Money<C>` gets its derived traits:
-/// `#[derive]` only implements a trait for `Money<C>` when `C` has it too, even
-/// though `C` only appears in `PhantomData`.
-pub trait Currency: Copy + Clone + PartialEq + Eq + PartialOrd + Ord + Hash {
+/// The supertraits guarantee every `Money<C>`, and every type holding one, gets
+/// its derived traits: `#[derive]` only implements a trait for `Money<C>` when
+/// `C` has it too, even though `C` only appears in `PhantomData`.
+pub trait Currency: Copy + Clone + fmt::Debug + PartialEq + Eq + PartialOrd + Ord + Hash {
     /// The ISO 4217 code, like `"USD"`.
     const CODE: &'static str;
+
+    /// How many digits of minor units make up one major unit: 2 for US dollars
+    /// (100 cents), 0 for the yen. ISO 4217 calls this the "minor unit".
+    ///
+    /// At most 19, so that 10 to that power (the minor units in one major
+    /// unit) fits in a `u64`. Creating an amount in a currency that declares
+    /// more is a compile error:
+    ///
+    /// ```
+    /// use ledger::{Currency, Money};
+    ///
+    /// #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    /// struct Fine;
+    ///
+    /// impl Currency for Fine {
+    ///     const CODE: &'static str = "XFN";
+    ///     const DECIMAL_PLACES: u32 = 19;
+    /// }
+    ///
+    /// let one = Money::<Fine>::from_minor_units(1);
+    /// assert_eq!(one.to_string(), "0.0000000000000000001 XFN");
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use ledger::{Currency, Money};
+    ///
+    /// #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    /// struct TooFine;
+    ///
+    /// impl Currency for TooFine {
+    ///     const CODE: &'static str = "XTF";
+    ///     const DECIMAL_PLACES: u32 = 20;
+    /// }
+    ///
+    /// // Creating the amount is enough to fail; it never has to be displayed.
+    /// let _one = Money::<TooFine>::from_minor_units(1);
+    /// ```
+    const DECIMAL_PLACES: u32;
 }
 
 /// US dollars, the only currency in v1.
@@ -22,6 +60,7 @@ pub struct Usd;
 
 impl Currency for Usd {
     const CODE: &'static str = "USD";
+    const DECIMAL_PLACES: u32 = 2;
 }
 
 /// An amount of money: a whole number of minor units in currency `C`, such as
@@ -62,6 +101,7 @@ impl Currency for Usd {
 ///
 /// impl Currency for Eur {
 ///     const CODE: &'static str = "EUR";
+///     const DECIMAL_PLACES: u32 = 2;
 /// }
 ///
 /// let a = Money::<Eur>::from_minor_units(100);
@@ -79,6 +119,7 @@ impl Currency for Usd {
 ///
 /// impl Currency for Eur {
 ///     const CODE: &'static str = "EUR";
+///     const DECIMAL_PLACES: u32 = 2;
 /// }
 ///
 /// let a = Money::<Usd>::from_minor_units(100);
@@ -94,6 +135,16 @@ pub struct Money<C: Currency> {
 impl<C: Currency> Money<C> {
     /// An amount of `minor_units` in currency `C`.
     pub const fn from_minor_units(minor_units: i64) -> Self {
+        // Checked when the compiler generates this code for a specific `C`.
+        // Every amount is created here, so a currency with too many decimal
+        // places fails the build, instead of overflowing `10_u64.pow` when an
+        // amount is displayed.
+        const {
+            assert!(
+                C::DECIMAL_PLACES <= 19,
+                "a currency can have at most 19 decimal places"
+            )
+        };
         Self {
             minor_units,
             currency: PhantomData,
@@ -120,6 +171,28 @@ impl<C: Currency> Money<C> {
 impl<C: Currency> fmt::Debug for Money<C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Money({} {})", self.minor_units, C::CODE)
+    }
+}
+
+/// Prints the amount in major units with the currency code, like `21.60 USD`
+/// or `-0.05 USD`. One implementation serves every currency: the code and the
+/// number of decimal places come from `C`.
+impl<C: Currency> fmt::Display for Money<C> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The sign is written separately: for -5 cents the whole part is 0,
+        // and an integer can't be -0. `unsigned_abs` (not `abs`) because
+        // `i64::MIN` has no positive `i64` counterpart.
+        let sign = if self.minor_units < 0 { "-" } else { "" };
+        let units = self.minor_units.unsigned_abs();
+        let code = C::CODE;
+        if C::DECIMAL_PLACES == 0 {
+            return write!(f, "{sign}{units} {code}");
+        }
+        let scale = 10_u64.pow(C::DECIMAL_PLACES);
+        let whole = units / scale;
+        let fraction = units % scale;
+        let width = C::DECIMAL_PLACES as usize;
+        write!(f, "{sign}{whole}.{fraction:0width$} {code}")
     }
 }
 
@@ -166,6 +239,50 @@ mod tests {
     fn debug_shows_minor_units_and_currency_code() {
         assert_eq!(format!("{:?}", usd(2_160)), "Money(2160 USD)");
         assert_eq!(format!("{:?}", usd(-500)), "Money(-500 USD)");
+    }
+
+    /// A currency with no minor units, like the yen.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    struct Jpy;
+
+    impl Currency for Jpy {
+        const CODE: &'static str = "JPY";
+        const DECIMAL_PLACES: u32 = 0;
+    }
+
+    #[test]
+    fn usd_has_two_decimal_places() {
+        assert_eq!(Usd::DECIMAL_PLACES, 2);
+    }
+
+    #[test]
+    fn displays_whole_and_fractional_units_with_the_code() {
+        assert_eq!(usd(2_160).to_string(), "21.60 USD");
+        assert_eq!(usd(5).to_string(), "0.05 USD");
+        assert_eq!(usd(0).to_string(), "0.00 USD");
+    }
+
+    #[test]
+    fn displays_negative_amounts() {
+        assert_eq!(usd(-500).to_string(), "-5.00 USD");
+        // The whole part is 0 and there's no integer −0, so the sign has to
+        // be written separately or it's lost.
+        assert_eq!(usd(-5).to_string(), "-0.05 USD");
+    }
+
+    #[test]
+    fn displays_the_limits_without_panicking() {
+        assert_eq!(usd(i64::MAX).to_string(), "92233720368547758.07 USD");
+        assert_eq!(usd(i64::MIN).to_string(), "-92233720368547758.08 USD");
+    }
+
+    #[test]
+    fn displays_currencies_without_minor_units() {
+        assert_eq!(
+            Money::<Jpy>::from_minor_units(2_160).to_string(),
+            "2160 JPY"
+        );
+        assert_eq!(Money::<Jpy>::from_minor_units(-5).to_string(), "-5 JPY");
     }
 
     #[test]

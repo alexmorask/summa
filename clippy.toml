@@ -1,3 +1,8 @@
 disallowed-methods = [
+    # `allow-invalid`: the ledger builds chrono without its clock features, so
+    # these paths don't exist there. The entries still apply to any crate that
+    # turns the clock on (Cargo merges features across the workspace).
     { path = "std::time::SystemTime::now", reason = "Time is an input (ADR 0003): take `now` as a parameter or use the injected clock." },
+    { path = "chrono::Utc::now", allow-invalid = true, reason = "Time is an input (ADR 0003): take `now` as a parameter or use the injected clock." },
+    { path = "chrono::Local::now", allow-invalid = true, reason = "Time is an input (ADR 0003): take `now` as a parameter or use the injected clock." },
 ]
