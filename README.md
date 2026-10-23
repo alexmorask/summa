@@ -50,6 +50,8 @@ Each milestone adds one idea, ends with something visibly working, and starts wi
 - **Time is an input:** code never reads the system clock, so a simulated clock can fast-forward renewals and revenue recognition ([ADR 0003](docs/adr/0003-time-as-an-input.md)).
 - **Currency in the type:** an amount is `Money<Usd>`, so adding amounts in different currencies doesn't compile ([ADR 0004](docs/adr/0004-currency-as-a-type-parameter.md)).
 - **The business supplies the ledger's vocabulary:** tag kinds and the chart of accounts come from the business, so the ledger serves any business unchanged ([ADR 0005](docs/adr/0005-the-business-supplies-the-ledgers-vocabulary.md)).
+- **Corrections link back:** a posted transaction gets an ID from the ledger, and a reversal records the ID of the transaction it cancels, so nothing is ever edited ([ADR 0006](docs/adr/0006-transaction-identity.md)).
+- **Balances as of either time:** balances are computed from entries and can be cut off by when things happened, when the books recorded them, or both, which reproduces any past report ([ADR 0007](docs/adr/0007-as-of-cutoffs.md)).
 - **PostgreSQL** for append-only storage, from M2.
 - **OpenTelemetry** for metrics, traces and logs, including ledger-specific signals like whether the trial balance still balances.
 - **Simulated** payment provider, tax provider and clock, so the demo can decline cards, change tax locations and fast-forward time.
