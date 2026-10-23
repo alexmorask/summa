@@ -17,7 +17,7 @@ The link has to go in one direction, and it has to respect that ledger records n
 - **The ledger stamps the ID at posting.** `post` takes the ID as an argument, the same way it takes the recorded time (ADR 0003). Pure code never makes one up, and an unposted transaction has none.
 - **`TransactionId` is opaque.** It can be compared, ordered, hashed and copied. It wraps a `u64` for now (see Consequences).
 - **The link is the reversal's `reverses` field.** The builder sets it with `reversing(original)`, and posting keeps it. It lives on the reversal because the original can never be edited to point forward.
-- **`build` doesn't check the link.** The builder can't see the original. Whether the original exists and has been reversed already is checked where both are visible: when the reversal is made, and in M2 by a unique constraint on `reverses` ("reversed at most once").
+- **`build` doesn't check the link.** The builder can't see the original. What can be checked without storage is checked when the reversal is made: `PostedTransaction::reversal` and `UnpostedTransaction::check_reversal_of` confirm the reversal mirrors the original and links to it. Whether the original exists and whether it was already reversed are M2's job: storage loads the original by ID, and a unique constraint on `reverses` enforces "reversed at most once".
 
 ## Alternatives considered
 

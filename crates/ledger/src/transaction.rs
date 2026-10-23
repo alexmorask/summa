@@ -198,8 +198,9 @@ impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
         })
     }
 
-    /// Posts with the playground chart for the ledger's own integration tests,
-    /// which can't reach the crate-private `post`. Production code must never
+    /// Posts for the ledger's own integration tests, which can't reach the
+    /// crate-private `post`; they post with the playground chart they pass in
+    /// as `chart`. Production code must never
     /// enable `test-support`, because only ledger storage may post and choose
     /// recorded times.
     #[cfg(feature = "test-support")]
