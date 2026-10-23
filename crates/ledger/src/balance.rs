@@ -6,7 +6,7 @@ use std::fmt;
 
 use chrono::{DateTime, Utc};
 
-use crate::account::AccountNumber;
+use crate::account::{AccountNumber, Side};
 use crate::chart::Chart;
 use crate::money::{Currency, Money};
 use crate::tag::Tag;
@@ -136,6 +136,118 @@ pub fn balance<'a, C: Currency + 'a, T: Tag + 'a>(
         })
 }
 
+/// One account's line in a trial balance: the side the balance actually sits
+/// on, and its size. The amount is never negative; an abnormal balance sits on
+/// the opposite side of the account's normal side.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TrialBalanceLine<C: Currency> {
+    account: AccountNumber,
+    side: Side,
+    amount: Money<C>,
+}
+
+impl<C: Currency> TrialBalanceLine<C> {
+    /// The account this line is for.
+    pub const fn account(&self) -> AccountNumber {
+        self.account
+    }
+
+    /// The side the balance sits on.
+    pub const fn side(&self) -> Side {
+        self.side
+    }
+
+    /// The size of the balance, never negative.
+    pub const fn amount(&self) -> Money<C> {
+        self.amount
+    }
+}
+
+/// Every account's balance, each on the side it sits on. For a balanced
+/// ledger the debit and credit totals are equal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TrialBalance<C: Currency> {
+    lines: Vec<TrialBalanceLine<C>>,
+    total_debits: Money<C>,
+    total_credits: Money<C>,
+}
+
+impl<C: Currency> TrialBalance<C> {
+    /// One line per account in the chart, in account number order.
+    pub fn lines(&self) -> &[TrialBalanceLine<C>] {
+        &self.lines
+    }
+
+    /// The sum of the lines on the debit side.
+    pub const fn total_debits(&self) -> Money<C> {
+        self.total_debits
+    }
+
+    /// The sum of the lines on the credit side.
+    pub const fn total_credits(&self) -> Money<C> {
+        self.total_credits
+    }
+
+    /// Whether the debit and credit totals are equal.
+    pub fn is_balanced(&self) -> bool {
+        self.total_debits == self.total_credits
+    }
+}
+
+/// The trial balance of every account in `chart` over the transactions that
+/// pass `cutoffs`. A balance on its normal side or at zero goes in that
+/// side's column; a negative one goes in the opposite column, negated. An
+/// entry whose account isn't in the chart is an error. An unbalanced result
+/// is returned as it is, so the caller can see it.
+pub fn trial_balance<'a, C: Currency + 'a, T: Tag + 'a>(
+    transactions: impl IntoIterator<Item = &'a PostedTransaction<C, T>>,
+    chart: &Chart,
+    cutoffs: Cutoffs,
+) -> Result<TrialBalance<C>, BalanceError> {
+    let transactions: Vec<_> = transactions.into_iter().collect();
+    for entry in transactions
+        .iter()
+        .filter(|transaction| cutoffs.includes(transaction))
+        .flat_map(|transaction| transaction.entries())
+    {
+        if chart.get(entry.account()).is_none() {
+            return Err(BalanceError::UnknownAccount {
+                account: entry.account(),
+            });
+        }
+    }
+    let mut lines = Vec::new();
+    let mut total_debits = Money::from_minor_units(0);
+    let mut total_credits = Money::from_minor_units(0);
+    for account in chart.accounts() {
+        let query = BalanceQuery::<T>::account(account.number()).cutoffs(cutoffs);
+        let signed = balance(transactions.iter().copied(), chart, &query)?;
+        let (side, amount) = if signed.minor_units() >= 0 {
+            (account.normal_side(), signed)
+        } else {
+            let negated = signed.checked_neg().map_err(|_| BalanceError::Overflow)?;
+            (account.normal_side().opposite(), negated)
+        };
+        let total = match side {
+            Side::Debit => &mut total_debits,
+            Side::Credit => &mut total_credits,
+        };
+        *total = total
+            .checked_add(amount)
+            .map_err(|_| BalanceError::Overflow)?;
+        lines.push(TrialBalanceLine {
+            account: account.number(),
+            side,
+            amount,
+        });
+    }
+    Ok(TrialBalance {
+        lines,
+        total_debits,
+        total_credits,
+    })
+}
+
 /// Why a balance couldn't be computed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BalanceError {
@@ -166,6 +278,7 @@ impl std::error::Error for BalanceError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::account::{Account, AccountType};
     use crate::money::Usd;
     use crate::test_support::*;
     use crate::transaction::{TransactionId, UnpostedTransaction};
@@ -385,6 +498,97 @@ mod tests {
         );
     }
 
+    /// The trial balance as `(account, side, cents)` triples.
+    fn lines(trial_balance: &TrialBalance<Usd>) -> Vec<(AccountNumber, Side, i64)> {
+        trial_balance
+            .lines()
+            .iter()
+            .map(|line| (line.account(), line.side(), line.amount().minor_units()))
+            .collect()
+    }
+
+    fn three_transactions(second_recorded_at: DateTime<Utc>) -> Vec<Posted> {
+        vec![
+            pair(ASSET, LIABILITY, 2_000, &[], noon(), noon(), 1),
+            pair(
+                LIABILITY,
+                REVENUE,
+                2_000,
+                &[],
+                noon(),
+                second_recorded_at,
+                2,
+            ),
+            pair(CONTRA_REVENUE, ASSET, 2_500, &[], noon(), noon(), 3),
+        ]
+    }
+
+    #[test]
+    fn places_each_balance_on_the_side_it_sits_on() {
+        let transactions = three_transactions(noon());
+        let trial_balance = trial_balance(&transactions, &chart(), Cutoffs::NONE).unwrap();
+        assert_eq!(
+            lines(&trial_balance),
+            vec![
+                (ASSET, Side::Credit, 500),
+                (LIABILITY, Side::Credit, 0),
+                (REVENUE, Side::Credit, 2_000),
+                (CONTRA_REVENUE, Side::Debit, 2_500),
+            ]
+        );
+        assert_eq!(trial_balance.total_debits(), usd(2_500));
+        assert_eq!(trial_balance.total_credits(), usd(2_500));
+        assert!(trial_balance.is_balanced());
+    }
+
+    #[test]
+    fn no_transactions_lists_every_account_at_zero() {
+        let transactions: Vec<Posted> = Vec::new();
+        let trial_balance = trial_balance(&transactions, &chart(), Cutoffs::NONE).unwrap();
+        assert_eq!(
+            lines(&trial_balance),
+            vec![
+                (ASSET, Side::Debit, 0),
+                (LIABILITY, Side::Credit, 0),
+                (REVENUE, Side::Credit, 0),
+                (CONTRA_REVENUE, Side::Debit, 0),
+            ]
+        );
+        assert!(trial_balance.is_balanced());
+    }
+
+    #[test]
+    fn respects_cutoffs() {
+        let transactions = three_transactions(noon() + TimeDelta::days(1));
+        let cutoffs = Cutoffs::NONE.recorded_before(noon() + TimeDelta::hours(1));
+        let trial_balance = trial_balance(&transactions, &chart(), cutoffs).unwrap();
+        assert_eq!(
+            lines(&trial_balance),
+            vec![
+                (ASSET, Side::Credit, 500),
+                (LIABILITY, Side::Credit, 2_000),
+                (REVENUE, Side::Credit, 0),
+                (CONTRA_REVENUE, Side::Debit, 2_500),
+            ]
+        );
+        assert!(trial_balance.is_balanced());
+    }
+
+    #[test]
+    fn rejects_an_entry_whose_account_is_missing_from_the_chart() {
+        let transactions = three_transactions(noon());
+        let without_revenue = Chart::new([
+            Account::new(ASSET, "Asset", AccountType::Asset),
+            Account::new(LIABILITY, "Liability", AccountType::Liability),
+            Account::contra(CONTRA_REVENUE, "Contra revenue", AccountType::Revenue),
+        ])
+        .unwrap();
+        assert_eq!(
+            trial_balance(&transactions, &without_revenue, Cutoffs::NONE),
+            Err(BalanceError::UnknownAccount { account: REVENUE })
+        );
+    }
+
     proptest! {
         #[test]
         fn every_balance_matches_a_plain_sum(
@@ -424,6 +628,64 @@ mod tests {
                 balance(&transactions, &chart(), &query),
                 Ok(usd(i64::try_from(oracle).unwrap()))
             );
+        }
+
+        #[test]
+        fn the_trial_balance_always_balances(
+            transactions in posted_transactions(),
+            cutoffs in any_cutoffs(),
+        ) {
+            let trial_balance = trial_balance(&transactions, &chart(), cutoffs).unwrap();
+            prop_assert!(trial_balance.is_balanced());
+            for line in trial_balance.lines() {
+                prop_assert!(line.amount().minor_units() >= 0);
+            }
+        }
+
+        #[test]
+        fn a_transaction_and_its_reversal_net_to_zero(
+            entries in valid_entries_with_varied_tags(),
+        ) {
+            let mut tags: Vec<TestTag> = Vec::new();
+            for tag in entries.iter().flat_map(|(_, _, _, tags)| tags) {
+                if !tags.contains(tag) {
+                    tags.push(tag.clone());
+                }
+            }
+            let original = entries
+                .into_iter()
+                .fold(
+                    UnpostedTransaction::builder(noon(), "Original"),
+                    |builder, (account, side, cents, tags)| match side {
+                        Side::Debit => builder.debit(account, usd(cents), tags),
+                        Side::Credit => builder.credit(account, usd(cents), tags),
+                    },
+                )
+                .build(&chart(), noon())
+                .unwrap()
+                .post(&chart(), TransactionId::new(1), noon())
+                .unwrap();
+            let reversal = original
+                .reversal(noon(), "Reverses 1", &chart(), noon())
+                .unwrap()
+                .post(&chart(), TransactionId::new(2), noon())
+                .unwrap();
+            let both = [original.clone(), reversal.clone()];
+            let queries = std::iter::once(None).chain(tags.into_iter().map(Some));
+            for tag in queries {
+                for account in chart().accounts() {
+                    let mut query = BalanceQuery::account(account.number());
+                    if let Some(tag) = tag.clone() {
+                        query = query.tagged(tag);
+                    }
+                    prop_assert_eq!(balance(&both, &chart(), &query), Ok(usd(0)));
+                    let original_balance = balance([&original], &chart(), &query).unwrap();
+                    prop_assert_eq!(
+                        balance([&reversal], &chart(), &query),
+                        original_balance.checked_neg().map_err(|_| BalanceError::Overflow)
+                    );
+                }
+            }
         }
     }
 }
