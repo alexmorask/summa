@@ -168,7 +168,7 @@ impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
     /// Private to the ledger crate, so no other crate can post or choose an ID
     /// or a recorded time. Ledger storage calls it.
     #[cfg_attr(
-        not(test),
+        not(any(test, feature = "test-support")),
         expect(dead_code, reason = "called by ledger storage from M2 (SUM-9)")
     )]
     pub(crate) fn post(
@@ -196,6 +196,20 @@ impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
             transaction: self,
             recorded_at,
         })
+    }
+
+    /// Posts with the playground chart for the ledger's own integration tests,
+    /// which can't reach the crate-private `post`. Production code must never
+    /// enable `test-support`, because only ledger storage may post and choose
+    /// recorded times.
+    #[cfg(feature = "test-support")]
+    pub fn post_for_tests(
+        self,
+        chart: &Chart,
+        id: TransactionId,
+        recorded_at: DateTime<Utc>,
+    ) -> Result<PostedTransaction<C, T>, PostError> {
+        self.post(chart, id, recorded_at)
     }
 }
 

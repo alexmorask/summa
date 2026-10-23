@@ -64,6 +64,19 @@ pub fn playground_chart() -> Chart {
     Chart::new(PLAYGROUND_ACCOUNTS).expect("playground account numbers are unique")
 }
 
+/// Sales Tax Payable isn't a playground account (the Ledger Core Spec uses it
+/// only in this example), so it's defined here with its number from the Chart
+/// of Accounts.
+pub const SALES_TAX_PAYABLE: Account = Account::new(
+    AccountNumber::new(2100),
+    "Sales Tax Payable",
+    AccountType::Liability,
+);
+
+pub fn chart_with_sales_tax() -> Chart {
+    Chart::new(PLAYGROUND_ACCOUNTS.into_iter().chain([SALES_TAX_PAYABLE])).unwrap()
+}
+
 /// A customer's ID. Its own type, so it can't be passed where a subscription
 /// ID belongs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

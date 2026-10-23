@@ -11,5 +11,11 @@ workspace = true
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 
+[features]
+# Exposes `UnpostedTransaction::post_for_tests` to the ledger's own integration tests.
+test-support = []
+
 [dev-dependencies]
+# The crate depends on itself so its integration tests build with `test-support`; `cargo build` leaves it off.
+ledger = { path = ".", features = ["test-support"] }
 proptest = "1.12"
