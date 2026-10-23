@@ -11,6 +11,25 @@ use crate::chart::Chart;
 use crate::money::{Currency, Money, MoneyError};
 use crate::tag::Tag;
 
+/// The identity of a posted transaction. The ledger stamps it at posting, like
+/// the recorded time, and pure code never makes one up (ADR 0003, ADR 0006).
+/// It is opaque: the only things to do with one are compare it and pass it
+/// around.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TransactionId(u64);
+
+impl TransactionId {
+    /// Wraps a number the ledger assigned.
+    pub const fn new(id: u64) -> Self {
+        Self(id)
+    }
+
+    /// The number inside, for storage and display.
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
 /// One line of a transaction: an account, a side, a positive amount, and tags
 /// saying who or what it's about.
 ///
@@ -91,6 +110,7 @@ pub struct UnpostedTransaction<C: Currency, T: Tag> {
     effective_at: DateTime<Utc>,
     description: String,
     entries: Vec<Entry<C, T>>,
+    reverses: Option<TransactionId>,
 }
 
 impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
@@ -105,6 +125,7 @@ impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
             effective_at,
             description: description.into(),
             entries: Vec::new(),
+            reverses: None,
         }
     }
 
@@ -123,8 +144,14 @@ impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
         self.entries.as_slice()
     }
 
-    /// Posts the transaction into a ledger with this `chart`: stamps the time
-    /// the ledger recorded it.
+    /// The transaction this one reverses, if it is a reversal. The link lives
+    /// on the reversal because the original can never change (ADR 0006).
+    pub const fn reverses(&self) -> Option<TransactionId> {
+        self.reverses
+    }
+
+    /// Posts the transaction into a ledger with this `chart`: stamps the ID
+    /// the ledger gave it and the time the ledger recorded it.
     ///
     /// The rules about the transaction itself (balance, positive amounts, two
     /// or more entries, no repeated tag kind) held at `build` and can't stop
@@ -138,15 +165,16 @@ impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
     /// 2. Every entry's account must be in the ledger's chart, which may not
     ///    be the chart the transaction was built against.
     ///
-    /// Private to the ledger crate, so no other crate can post or choose a
-    /// recorded time. Ledger storage calls it.
+    /// Private to the ledger crate, so no other crate can post or choose an ID
+    /// or a recorded time. Ledger storage calls it.
     #[cfg_attr(
-        not(test),
+        not(any(test, feature = "test-support")),
         expect(dead_code, reason = "called by ledger storage from M2 (SUM-9)")
     )]
     pub(crate) fn post(
         self,
         chart: &Chart,
+        id: TransactionId,
         recorded_at: DateTime<Utc>,
     ) -> Result<PostedTransaction<C, T>, PostError> {
         if self.effective_at > recorded_at {
@@ -164,14 +192,30 @@ impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
             }
         }
         Ok(PostedTransaction {
+            id,
             transaction: self,
             recorded_at,
         })
     }
+
+    /// Posts for the ledger's own integration tests, which can't reach the
+    /// crate-private `post`; they post with the playground chart they pass in
+    /// as `chart`. Production code must never
+    /// enable `test-support`, because only ledger storage may post and choose
+    /// recorded times.
+    #[cfg(feature = "test-support")]
+    pub fn post_for_tests(
+        self,
+        chart: &Chart,
+        id: TransactionId,
+        recorded_at: DateTime<Utc>,
+    ) -> Result<PostedTransaction<C, T>, PostError> {
+        self.post(chart, id, recorded_at)
+    }
 }
 
 /// A transaction the ledger has posted: everything the unposted transaction
-/// had, plus the time it was recorded. Only the ledger can create one.
+/// had, plus its ID and the time it was recorded. Only the ledger can create one.
 ///
 /// From outside the ledger crate, a transaction can be built:
 ///
@@ -212,7 +256,7 @@ impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
 ///
 /// ```compile_fail
 /// use chrono::{TimeZone, Utc};
-/// use ledger::{Account, AccountNumber, AccountType, Chart, Money, Tag, UnpostedTransaction, Usd};
+/// use ledger::{Account, AccountNumber, AccountType, Chart, Money, Tag, TransactionId, UnpostedTransaction, Usd};
 ///
 /// #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 /// enum ExampleTag {
@@ -241,15 +285,26 @@ impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
 ///     .credit(sales, amount, [ExampleTag::Customer(42)])
 ///     .build(&chart, now)
 ///     .unwrap();
-/// let _posted = unposted.post(&chart, now);
+/// let _posted = unposted.post(&chart, TransactionId::new(1), now);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PostedTransaction<C: Currency, T: Tag> {
+    id: TransactionId,
     transaction: UnpostedTransaction<C, T>,
     recorded_at: DateTime<Utc>,
 }
 
 impl<C: Currency, T: Tag> PostedTransaction<C, T> {
+    /// The ID the ledger gave it when it was posted.
+    pub const fn id(&self) -> TransactionId {
+        self.id
+    }
+
+    /// The transaction this one reverses, if it is a reversal.
+    pub const fn reverses(&self) -> Option<TransactionId> {
+        self.transaction.reverses
+    }
+
     /// When the event happened in the business.
     pub const fn effective_at(&self) -> DateTime<Utc> {
         self.transaction.effective_at
@@ -279,9 +334,17 @@ pub struct TransactionBuilder<C: Currency, T: Tag> {
     effective_at: DateTime<Utc>,
     description: String,
     entries: Vec<Entry<C, T>>,
+    reverses: Option<TransactionId>,
 }
 
 impl<C: Currency, T: Tag> TransactionBuilder<C, T> {
+    /// Marks the transaction as reversing `original`. Nothing is checked at
+    /// `build`: the builder can't see the original.
+    pub fn reversing(mut self, original: TransactionId) -> Self {
+        self.reverses = Some(original);
+        self
+    }
+
     /// Adds a debit entry.
     pub fn debit(
         self,
@@ -372,6 +435,7 @@ impl<C: Currency, T: Tag> TransactionBuilder<C, T> {
             effective_at: self.effective_at,
             description: self.description,
             entries: self.entries,
+            reverses: self.reverses,
         })
     }
 }
@@ -511,7 +575,7 @@ impl fmt::Display for PostError {
 impl std::error::Error for PostError {}
 
 /// RFC 3339 in UTC with a `Z`, showing fractional seconds only when present.
-fn utc(time: DateTime<Utc>) -> String {
+pub(crate) fn utc(time: DateTime<Utc>) -> String {
     time.to_rfc3339_opts(SecondsFormat::AutoSi, true)
 }
 
@@ -520,47 +584,9 @@ mod tests {
     use super::*;
     use crate::account::{Account, AccountType};
     use crate::money::Usd;
+    use crate::test_support::*;
     use chrono::{TimeDelta, TimeZone};
     use proptest::prelude::*;
-
-    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-    enum TestTag {
-        Alpha(u64),
-        Beta(u64),
-    }
-
-    impl Tag for TestTag {
-        fn kind(&self) -> &'static str {
-            match self {
-                TestTag::Alpha(_) => "alpha",
-                TestTag::Beta(_) => "beta",
-            }
-        }
-    }
-
-    const ASSET: AccountNumber = AccountNumber::new(1);
-    const LIABILITY: AccountNumber = AccountNumber::new(2);
-    const REVENUE: AccountNumber = AccountNumber::new(3);
-    const NOT_IN_CHART: AccountNumber = AccountNumber::new(99);
-
-    fn chart() -> Chart {
-        Chart::new([
-            Account::new(ASSET, "Asset", AccountType::Asset),
-            Account::new(LIABILITY, "Liability", AccountType::Liability),
-            Account::new(REVENUE, "Revenue", AccountType::Revenue),
-        ])
-        .unwrap()
-    }
-
-    fn usd(cents: i64) -> Money<Usd> {
-        Money::from_minor_units(cents)
-    }
-
-    /// 2026-10-16 12:00:00 UTC: the default effective time and `now`, which
-    /// tests move earlier or later when they need to.
-    fn noon() -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 10, 16, 12, 0, 0).unwrap()
-    }
 
     fn builder() -> TransactionBuilder<Usd, TestTag> {
         UnpostedTransaction::builder(noon(), "Test")
@@ -990,11 +1016,47 @@ mod tests {
         .unwrap()
     }
 
+    const ID: TransactionId = TransactionId::new(7);
+
+    #[test]
+    fn post_stamps_the_id() {
+        let unposted = balanced().build(&chart(), noon()).unwrap();
+        let posted = unposted
+            .post(&chart(), TransactionId::new(7), noon())
+            .unwrap();
+        assert_eq!(posted.id(), TransactionId::new(7));
+    }
+
+    #[test]
+    fn transactions_reverse_nothing_by_default() {
+        let unposted = balanced().build(&chart(), noon()).unwrap();
+        assert_eq!(unposted.reverses(), None);
+        let posted = unposted.post(&chart(), ID, noon()).unwrap();
+        assert_eq!(posted.reverses(), None);
+    }
+
+    #[test]
+    fn reversing_sets_the_link_and_posting_keeps_it() {
+        let unposted = balanced()
+            .reversing(TransactionId::new(3))
+            .build(&chart(), noon())
+            .unwrap();
+        assert_eq!(unposted.reverses(), Some(TransactionId::new(3)));
+        let posted = unposted.post(&chart(), ID, noon()).unwrap();
+        assert_eq!(posted.reverses(), Some(TransactionId::new(3)));
+    }
+
+    #[test]
+    fn transaction_ids_compare_by_number() {
+        assert!(TransactionId::new(1) < TransactionId::new(2));
+        assert_eq!(TransactionId::new(5).get(), 5);
+    }
+
     #[test]
     fn post_stamps_the_recorded_time_and_keeps_everything_else() {
         let unposted = balanced().build(&chart(), noon()).unwrap();
         let recorded_at = noon() + TimeDelta::days(2);
-        let posted = unposted.clone().post(&chart(), recorded_at).unwrap();
+        let posted = unposted.clone().post(&chart(), ID, recorded_at).unwrap();
         assert_eq!(posted.recorded_at(), recorded_at);
         assert_eq!(posted.effective_at(), unposted.effective_at());
         assert_eq!(posted.description(), unposted.description());
@@ -1004,7 +1066,7 @@ mod tests {
     #[test]
     fn post_accepts_a_recorded_time_equal_to_the_effective_time() {
         let unposted = balanced().build(&chart(), noon()).unwrap();
-        assert!(unposted.post(&chart(), noon()).is_ok());
+        assert!(unposted.post(&chart(), ID, noon()).is_ok());
     }
 
     #[test]
@@ -1012,7 +1074,7 @@ mod tests {
         let unposted = balanced().build(&chart(), noon()).unwrap();
         let earlier = noon() - TimeDelta::seconds(1);
         assert_eq!(
-            unposted.post(&chart(), earlier),
+            unposted.post(&chart(), ID, earlier),
             Err(PostError::EffectiveAfterRecorded {
                 effective_at: noon(),
                 recorded_at: earlier,
@@ -1026,7 +1088,7 @@ mod tests {
         // ledger whose chart doesn't have it.
         let unposted = balanced().build(&chart(), noon()).unwrap();
         assert_eq!(
-            unposted.post(&chart_without_revenue(), noon()),
+            unposted.post(&chart_without_revenue(), ID, noon()),
             Err(PostError::UnknownAccount {
                 entry: 1,
                 account: REVENUE,
@@ -1039,7 +1101,7 @@ mod tests {
         let unposted = balanced().build(&chart(), noon()).unwrap();
         let earlier = noon() - TimeDelta::seconds(1);
         assert!(matches!(
-            unposted.post(&chart_without_revenue(), earlier),
+            unposted.post(&chart_without_revenue(), ID, earlier),
             Err(PostError::EffectiveAfterRecorded { .. })
         ));
     }
@@ -1065,55 +1127,6 @@ mod tests {
     }
 
     // --- Rules that must always hold ---
-
-    /// An entry before it's added to a builder: account, side, amount in
-    /// cents, tags.
-    type TestEntry = (AccountNumber, Side, i64, Vec<TestTag>);
-
-    /// One balanced group of entries: a debit of `x` and a credit of `x`, or a
-    /// debit of `x + y` split into credits of `x` and `y`. The last two values
-    /// are the debit and credit account numbers, both in the chart.
-    fn balanced_group() -> impl Strategy<Value = (i64, Option<i64>, u32, u32)> {
-        (
-            1_i64..=1_000_000,
-            prop::option::of(1_i64..=1_000_000),
-            1_u32..=3,
-            1_u32..=3,
-        )
-    }
-
-    /// A valid transaction's entries: one to three balanced groups, every
-    /// entry carrying the same tags, at most one of each kind.
-    fn valid_entries() -> impl Strategy<Value = Vec<TestEntry>> {
-        (
-            prop::collection::vec(balanced_group(), 1..4),
-            prop::option::of(0_u64..100),
-            prop::option::of(0_u64..100),
-        )
-            .prop_map(|(groups, alpha, beta)| {
-                let tags: Vec<TestTag> = alpha
-                    .map(TestTag::Alpha)
-                    .into_iter()
-                    .chain(beta.map(TestTag::Beta))
-                    .collect();
-                let mut entries = Vec::new();
-                for (x, y, debit, credit) in groups {
-                    let (debit, credit) = (AccountNumber::new(debit), AccountNumber::new(credit));
-                    match y {
-                        None => {
-                            entries.push((debit, Side::Debit, x, tags.clone()));
-                            entries.push((credit, Side::Credit, x, tags.clone()));
-                        }
-                        Some(y) => {
-                            entries.push((debit, Side::Debit, x + y, tags.clone()));
-                            entries.push((credit, Side::Credit, x, tags.clone()));
-                            entries.push((credit, Side::Credit, y, tags.clone()));
-                        }
-                    }
-                }
-                entries
-            })
-    }
 
     /// At most one thing wrong with a valid transaction. `Index` picks which
     /// entry, whatever the number of entries turns out to be.

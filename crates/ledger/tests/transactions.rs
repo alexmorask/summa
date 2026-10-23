@@ -6,26 +6,10 @@ mod common;
 use chrono::{DateTime, TimeZone, Utc};
 use common::PlaygroundTag::{Customer, Subscription};
 use common::{
-    CustomerId, DEFERRED_REVENUE_SUBSCRIPTIONS, PAYMENT_PROVIDER_CLEARING, PLAYGROUND_ACCOUNTS,
-    PlaygroundTag, SubscriptionId, playground_chart,
+    CustomerId, DEFERRED_REVENUE_SUBSCRIPTIONS, PAYMENT_PROVIDER_CLEARING, PlaygroundTag,
+    SALES_TAX_PAYABLE, SubscriptionId, chart_with_sales_tax, playground_chart,
 };
-use ledger::{
-    Account, AccountNumber, AccountType, Chart, Money, Side, TransactionBuilder, TransactionError,
-    UnpostedTransaction, Usd,
-};
-
-/// Sales Tax Payable isn't a playground account (the Ledger Core Spec uses it
-/// only in this example), so it's defined here with its number from the Chart
-/// of Accounts.
-const SALES_TAX_PAYABLE: Account = Account::new(
-    AccountNumber::new(2100),
-    "Sales Tax Payable",
-    AccountType::Liability,
-);
-
-fn chart_with_sales_tax() -> Chart {
-    Chart::new(PLAYGROUND_ACCOUNTS.into_iter().chain([SALES_TAX_PAYABLE])).unwrap()
-}
+use ledger::{Money, Side, TransactionBuilder, TransactionError, UnpostedTransaction, Usd};
 
 fn usd(cents: i64) -> Money<Usd> {
     Money::from_minor_units(cents)

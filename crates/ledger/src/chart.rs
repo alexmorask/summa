@@ -35,6 +35,12 @@ impl Chart {
     pub fn get(&self, number: AccountNumber) -> Option<&Account> {
         self.accounts.get(&number)
     }
+
+    /// Every account in the chart, in number order. The trial balance lists
+    /// every account, including those with no entries.
+    pub fn accounts(&self) -> impl Iterator<Item = &Account> {
+        self.accounts.values()
+    }
 }
 
 /// Why a chart was rejected.
@@ -86,6 +92,23 @@ mod tests {
     fn an_empty_chart_is_allowed() {
         let chart = Chart::new([]).unwrap();
         assert_eq!(chart.get(AccountNumber::new(1)), None);
+    }
+
+    #[test]
+    fn lists_accounts_in_number_order() {
+        let chart = Chart::new([
+            account(3, "Third"),
+            account(1, "First"),
+            account(2, "Second"),
+        ])
+        .unwrap();
+        let numbers: Vec<u32> = chart.accounts().map(|a| a.number().get()).collect();
+        assert_eq!(numbers, [1, 2, 3]);
+    }
+
+    #[test]
+    fn an_empty_chart_lists_nothing() {
+        assert_eq!(Chart::new([]).unwrap().accounts().count(), 0);
     }
 
     #[test]

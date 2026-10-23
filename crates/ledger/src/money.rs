@@ -164,6 +164,25 @@ impl<C: Currency> Money<C> {
             .map(Self::from_minor_units)
             .ok_or(MoneyError::Overflow)
     }
+
+    /// Subtracts `other` from this amount, or returns [`MoneyError::Overflow`]
+    /// if the exact difference doesn't fit in an `i64` number of minor units.
+    /// Balances are built from debits minus credits, and may go below zero.
+    pub fn checked_sub(self, other: Self) -> Result<Self, MoneyError> {
+        self.minor_units
+            .checked_sub(other.minor_units)
+            .map(Self::from_minor_units)
+            .ok_or(MoneyError::Overflow)
+    }
+
+    /// The opposite amount, or [`MoneyError::Overflow`] for the minimum `i64`,
+    /// whose opposite doesn't fit. Balances need it to flip a sign.
+    pub fn checked_neg(self) -> Result<Self, MoneyError> {
+        self.minor_units
+            .checked_neg()
+            .map(Self::from_minor_units)
+            .ok_or(MoneyError::Overflow)
+    }
 }
 
 /// Prints `Money(2160 USD)`: the minor units and the currency code, without
@@ -320,6 +339,35 @@ mod tests {
     }
 
     #[test]
+    fn subtracts_amounts_exactly() {
+        assert_eq!(usd(24_000).checked_sub(usd(4_000)), Ok(usd(20_000)));
+        // A balance may go below zero.
+        assert_eq!(usd(2_000).checked_sub(usd(4_160)), Ok(usd(-2_160)));
+    }
+
+    #[test]
+    fn rejects_subtraction_overflow() {
+        assert_eq!(usd(i64::MIN).checked_sub(usd(1)), Err(MoneyError::Overflow));
+        assert_eq!(
+            usd(i64::MAX).checked_sub(usd(-1)),
+            Err(MoneyError::Overflow)
+        );
+    }
+
+    #[test]
+    fn negates_amounts() {
+        assert_eq!(usd(2_160).checked_neg(), Ok(usd(-2_160)));
+        assert_eq!(usd(-500).checked_neg(), Ok(usd(500)));
+        assert_eq!(usd(0).checked_neg(), Ok(usd(0)));
+        assert_eq!(usd(i64::MAX).checked_neg(), Ok(usd(-i64::MAX)));
+    }
+
+    #[test]
+    fn rejects_negating_the_minimum() {
+        assert_eq!(usd(i64::MIN).checked_neg(), Err(MoneyError::Overflow));
+    }
+
+    #[test]
     fn overflow_error_explains_itself() {
         assert_eq!(
             MoneyError::Overflow.to_string(),
@@ -336,6 +384,29 @@ mod tests {
             let result = usd(a).checked_add(usd(b));
             match i64::try_from(exact) {
                 Ok(sum) => prop_assert_eq!(result, Ok(usd(sum))),
+                Err(_) => prop_assert_eq!(result, Err(MoneyError::Overflow)),
+            }
+        }
+
+        /// Subtracting never loses or invents a cent: the exact difference,
+        /// computed in `i128`, or an error.
+        #[test]
+        fn subtracting_never_loses_or_invents_a_cent(a in any::<i64>(), b in any::<i64>()) {
+            let exact = i128::from(a) - i128::from(b);
+            let result = usd(a).checked_sub(usd(b));
+            match i64::try_from(exact) {
+                Ok(difference) => prop_assert_eq!(result, Ok(usd(difference))),
+                Err(_) => prop_assert_eq!(result, Err(MoneyError::Overflow)),
+            }
+        }
+
+        /// Negating gives the exact opposite, computed in `i128`, or an error.
+        #[test]
+        fn negating_matches_exact_negation(a in any::<i64>()) {
+            let exact = -i128::from(a);
+            let result = usd(a).checked_neg();
+            match i64::try_from(exact) {
+                Ok(negated) => prop_assert_eq!(result, Ok(usd(negated))),
                 Err(_) => prop_assert_eq!(result, Err(MoneyError::Overflow)),
             }
         }
