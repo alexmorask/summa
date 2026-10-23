@@ -1,13 +1,15 @@
 //! Fixtures shared by the crate's unit tests: a small chart, tags, amounts, a
 //! fixed time, and generators for valid transactions. Test-only.
 
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, TimeDelta, TimeZone, Utc};
 use proptest::prelude::*;
 
 use crate::account::{Account, AccountNumber, AccountType, Side};
+use crate::balance::Cutoffs;
 use crate::chart::Chart;
 use crate::money::{Money, Usd};
 use crate::tag::Tag;
+use crate::transaction::{PostedTransaction, TransactionId, UnpostedTransaction};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum TestTag {
@@ -97,5 +99,92 @@ pub(crate) fn valid_entries() -> impl Strategy<Value = Vec<TestEntry>> {
                 }
             }
             entries
+        })
+}
+
+/// A tag of either kind, with a value in `0..3` so tags repeat often.
+pub(crate) fn any_test_tag() -> impl Strategy<Value = TestTag> {
+    prop_oneof![
+        (0_u64..3).prop_map(TestTag::Alpha),
+        (0_u64..3).prop_map(TestTag::Beta),
+    ]
+}
+
+/// Like [`valid_entries`], but each entry gets its own optional `Alpha` and
+/// optional `Beta` tag (values in `0..3`), so tags differ between entries and
+/// repeat across transactions.
+pub(crate) fn valid_entries_with_varied_tags() -> impl Strategy<Value = Vec<TestEntry>> {
+    // valid_entries makes at most three groups of three entries.
+    (
+        valid_entries(),
+        prop::collection::vec((prop::option::of(0_u64..3), prop::option::of(0_u64..3)), 9),
+    )
+        .prop_map(|(entries, tags)| {
+            entries
+                .into_iter()
+                .zip(tags)
+                .map(|((account, side, cents, _), (alpha, beta))| {
+                    let tags = alpha
+                        .map(TestTag::Alpha)
+                        .into_iter()
+                        .chain(beta.map(TestTag::Beta))
+                        .collect();
+                    (account, side, cents, tags)
+                })
+                .collect()
+        })
+}
+
+/// Zero to eight posted transactions with IDs `1..=n`. Each is effective up
+/// to 30 days before `noon()` and recorded up to 5 days after that.
+pub(crate) fn posted_transactions() -> impl Strategy<Value = Vec<PostedTransaction<Usd, TestTag>>> {
+    prop::collection::vec(
+        (
+            valid_entries_with_varied_tags(),
+            0_i64..=30 * 86_400,
+            0_i64..=5 * 86_400,
+        ),
+        0..=8,
+    )
+    .prop_map(|specs| {
+        specs
+            .into_iter()
+            .enumerate()
+            .map(|(index, (entries, earlier, later))| {
+                let effective_at = noon() - TimeDelta::seconds(earlier);
+                let recorded_at = effective_at + TimeDelta::seconds(later);
+                entries
+                    .into_iter()
+                    .fold(
+                        UnpostedTransaction::builder(effective_at, "Generated"),
+                        |builder, (account, side, cents, tags)| match side {
+                            Side::Debit => builder.debit(account, usd(cents), tags),
+                            Side::Credit => builder.credit(account, usd(cents), tags),
+                        },
+                    )
+                    .build(&chart(), effective_at)
+                    .unwrap()
+                    .post(&chart(), TransactionId::new(index as u64 + 1), recorded_at)
+                    .unwrap()
+            })
+            .collect()
+    })
+}
+
+/// Cutoffs where each is unset or up to 35 days before `noon()`.
+pub(crate) fn any_cutoffs() -> impl Strategy<Value = Cutoffs> {
+    (
+        prop::option::of(0_i64..=35 * 86_400),
+        prop::option::of(0_i64..=35 * 86_400),
+    )
+        .prop_map(|(effective, recorded)| {
+            let mut cutoffs = Cutoffs::NONE;
+            if let Some(seconds) = effective {
+                cutoffs = cutoffs.effective_before(noon() - TimeDelta::seconds(seconds));
+            }
+            if let Some(seconds) = recorded {
+                cutoffs = cutoffs.recorded_before(noon() - TimeDelta::seconds(seconds));
+            }
+            cutoffs
         })
 }

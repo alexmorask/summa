@@ -2,6 +2,7 @@
 //! module in Summa is built on.
 
 mod account;
+mod balance;
 mod chart;
 mod money;
 mod reversal;
@@ -11,6 +12,7 @@ mod test_support;
 mod transaction;
 
 pub use account::{Account, AccountNumber, AccountType, Permanence, Side};
+pub use balance::{BalanceError, BalanceQuery, Cutoffs, balance};
 pub use chart::{Chart, ChartError};
 pub use money::{Currency, Money, MoneyError, Usd};
 pub use reversal::ReversalError;
