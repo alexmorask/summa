@@ -325,3 +325,34 @@ async fn accepts_balanced_three_entry_transaction(pool: PgPool) {
         .unwrap();
     tx.commit().await.unwrap();
 }
+
+#[sqlx::test]
+async fn refuses_entry_that_unbalances_a_committed_transaction(pool: PgPool) {
+    insert_valid(&pool, 1, "valid").await;
+    let mut tx = pool.begin().await.unwrap();
+    insert_entry(&mut *tx, 1, 2, 3000, "debit", 100, "USD")
+        .await
+        .unwrap();
+    let result = tx.commit().await;
+    assert!(refusal(result).contains("not balanced"));
+    let entries: i64 = sqlx::query_scalar("SELECT count(*) FROM entries WHERE transaction_id = 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(entries, 2);
+}
+
+#[sqlx::test]
+async fn refuses_credits_only_transaction(pool: PgPool) {
+    let mut tx = pool.begin().await.unwrap();
+    begin_transaction_row(&mut tx, 1, "key").await;
+    insert_entry(&mut *tx, 1, 0, 1000, "credit", 500, "USD")
+        .await
+        .unwrap();
+    insert_entry(&mut *tx, 1, 1, 2000, "credit", 500, "USD")
+        .await
+        .unwrap();
+    let result = tx.commit().await;
+    assert!(refusal(result).contains("not balanced"));
+    assert_empty(&pool).await;
+}
