@@ -1,0 +1,4 @@
+[env]
+DATABASE_URL = "postgres://summa:summa@localhost:5432/summa"
+# Builds use the checked-in `.sqlx/` query data, so they work without a database.
+SQLX_OFFLINE = "true"

@@ -6,6 +6,8 @@ mod balance;
 mod chart;
 mod money;
 mod reversal;
+#[cfg(feature = "postgres")]
+mod store;
 mod tag;
 #[cfg(test)]
 mod test_support;
