@@ -96,6 +96,14 @@ pub enum CorruptData {
     },
     /// The stored idempotency key isn't a valid key.
     InvalidIdempotencyKey { transaction: i64, key: String },
+    /// Two entry rows share a position.
+    DuplicatePosition { transaction: i64, position: i16 },
+    /// Two tag rows share a position and kind.
+    DuplicateTag {
+        transaction: i64,
+        position: i16,
+        kind: String,
+    },
 }
 
 impl fmt::Display for CorruptData {
@@ -128,6 +136,21 @@ impl fmt::Display for CorruptData {
             CorruptData::InvalidIdempotencyKey { transaction, key } => write!(
                 f,
                 "corrupt data in transaction {transaction}: stored idempotency key {key:?} is not valid"
+            ),
+            CorruptData::DuplicatePosition {
+                transaction,
+                position,
+            } => write!(
+                f,
+                "corrupt data in transaction {transaction}: more than one entry at position {position}"
+            ),
+            CorruptData::DuplicateTag {
+                transaction,
+                position,
+                kind,
+            } => write!(
+                f,
+                "corrupt data in transaction {transaction}: more than one {kind:?} tag on the entry at position {position}"
             ),
         }
     }
@@ -199,11 +222,29 @@ pub(crate) fn assemble<T: StoredTag>(
             });
         }
         let amount = Money::from_minor_units(row.amount);
-        parsed.insert(row.position, (account, side, amount, Vec::new()));
+        if parsed
+            .insert(row.position, (account, side, amount, Vec::new()))
+            .is_some()
+        {
+            return Err(CorruptData::DuplicatePosition {
+                transaction: tx,
+                position: row.position,
+            });
+        }
     }
 
     let mut tags = tags;
     tags.sort_by(|a, b| (a.position, &a.kind).cmp(&(b.position, &b.kind)));
+    if let Some(pair) = tags
+        .windows(2)
+        .find(|pair| (pair[0].position, &pair[0].kind) == (pair[1].position, &pair[1].kind))
+    {
+        return Err(CorruptData::DuplicateTag {
+            transaction: tx,
+            position: pair[0].position,
+            kind: pair[0].kind.clone(),
+        });
+    }
     for row in tags {
         let Some((_, _, _, entry_tags)) = parsed.get_mut(&row.position) else {
             return Err(CorruptData::OutOfRange {
@@ -449,6 +490,45 @@ mod tests {
             CorruptData::InvalidIdempotencyKey {
                 transaction: 7,
                 key: " padded ".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn duplicate_entry_position_is_corrupt() {
+        let error = assemble::<TestTag>(
+            tx_row(),
+            vec![
+                entry_row(0, 1, "debit", 100),
+                entry_row(1, 2, "credit", 100),
+                entry_row(1, 3, "credit", 5),
+            ],
+            vec![],
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            CorruptData::DuplicatePosition {
+                transaction: 7,
+                position: 1
+            }
+        );
+    }
+
+    #[test]
+    fn duplicate_tag_is_corrupt() {
+        let error = assemble::<TestTag>(
+            tx_row(),
+            vec![entry_row(0, 1, "debit", 1)],
+            vec![tag_row(0, "alpha", "1"), tag_row(0, "alpha", "2")],
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            CorruptData::DuplicateTag {
+                transaction: 7,
+                position: 0,
+                kind: "alpha".to_string()
             }
         );
     }
