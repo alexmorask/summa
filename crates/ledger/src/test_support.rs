@@ -7,6 +7,7 @@ use proptest::prelude::*;
 use crate::account::{Account, AccountNumber, AccountType, Side};
 use crate::balance::Cutoffs;
 use crate::chart::Chart;
+use crate::idempotency::IdempotencyKey;
 use crate::money::{Money, Usd};
 use crate::tag::Tag;
 use crate::transaction::{PostedTransaction, TransactionId, UnpostedTransaction};
@@ -41,6 +42,11 @@ pub(crate) fn chart() -> Chart {
         Account::contra(CONTRA_REVENUE, "Contra revenue", AccountType::Revenue),
     ])
     .unwrap()
+}
+
+/// A valid idempotency key from text, for tests.
+pub(crate) fn key(text: &str) -> IdempotencyKey {
+    IdempotencyKey::new(text).unwrap()
 }
 
 pub(crate) fn usd(cents: i64) -> Money<Usd> {
@@ -156,7 +162,11 @@ pub(crate) fn posted_transactions() -> impl Strategy<Value = Vec<PostedTransacti
                 entries
                     .into_iter()
                     .fold(
-                        UnpostedTransaction::builder(effective_at, "Generated"),
+                        UnpostedTransaction::builder(
+                            key(&format!("generated-{index}")),
+                            effective_at,
+                            "Generated",
+                        ),
                         |builder, (account, side, cents, tags)| match side {
                             Side::Debit => builder.debit(account, usd(cents), tags),
                             Side::Credit => builder.credit(account, usd(cents), tags),

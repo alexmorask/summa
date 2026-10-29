@@ -8,6 +8,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 
 use crate::account::{AccountNumber, Side};
 use crate::chart::Chart;
+use crate::idempotency::IdempotencyKey;
 use crate::money::{Currency, Money, MoneyError};
 use crate::tag::Tag;
 
@@ -70,7 +71,9 @@ impl<C: Currency, T: Tag> Entry<C, T> {
 ///
 /// ```
 /// use chrono::{TimeZone, Utc};
-/// use ledger::{Account, AccountNumber, AccountType, Chart, Money, Tag, UnpostedTransaction, Usd};
+/// use ledger::{
+///     Account, AccountNumber, AccountType, Chart, IdempotencyKey, Money, Tag, UnpostedTransaction, Usd,
+/// };
 ///
 /// #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 /// enum ExampleTag {
@@ -97,7 +100,11 @@ impl<C: Currency, T: Tag> Entry<C, T> {
 /// let now = Utc.with_ymd_and_hms(2026, 9, 30, 12, 0, 0).unwrap();
 ///
 /// // $21.60 = $20.00 + $1.60
-/// let sale = UnpostedTransaction::builder(now, "A taxed sale")
+/// let sale = UnpostedTransaction::builder(
+///     IdempotencyKey::new("sale-1").unwrap(),
+///     now,
+///     "A taxed sale",
+/// )
 ///     .debit(receivable, Money::<Usd>::from_minor_units(2_160), [ExampleTag::Customer(42)])
 ///     .credit(revenue, Money::from_minor_units(2_000), [ExampleTag::Customer(42)])
 ///     .credit(tax, Money::from_minor_units(160), [ExampleTag::Customer(42)])
@@ -107,6 +114,7 @@ impl<C: Currency, T: Tag> Entry<C, T> {
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnpostedTransaction<C: Currency, T: Tag> {
+    idempotency_key: IdempotencyKey,
     effective_at: DateTime<Utc>,
     description: String,
     entries: Vec<Entry<C, T>>,
@@ -114,19 +122,28 @@ pub struct UnpostedTransaction<C: Currency, T: Tag> {
 }
 
 impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
-    /// Starts a transaction that happened at `effective_at`, with a
-    /// description for humans. Add entries with `.debit(...)` and
-    /// `.credit(...)`, then check everything with `.build(...)`.
+    /// Starts a transaction named `key` that happened at `effective_at`, with
+    /// a description for humans. The key is how a retry of the same request
+    /// is recognised instead of being recorded twice. Add entries with
+    /// `.debit(...)` and `.credit(...)`, then check everything with
+    /// `.build(...)`.
     pub fn builder(
+        key: IdempotencyKey,
         effective_at: DateTime<Utc>,
         description: impl Into<String>,
     ) -> TransactionBuilder<C, T> {
         TransactionBuilder {
+            idempotency_key: key,
             effective_at,
             description: description.into(),
             entries: Vec::new(),
             reverses: None,
         }
+    }
+
+    /// The caller's name for this transaction, used to recognise retries.
+    pub const fn idempotency_key(&self) -> &IdempotencyKey {
+        &self.idempotency_key
     }
 
     /// When the event happened in the business.
@@ -221,7 +238,9 @@ impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
 ///
 /// ```
 /// use chrono::{TimeZone, Utc};
-/// use ledger::{Account, AccountNumber, AccountType, Chart, Money, Tag, UnpostedTransaction, Usd};
+/// use ledger::{
+///     Account, AccountNumber, AccountType, Chart, IdempotencyKey, Money, Tag, UnpostedTransaction, Usd,
+/// };
 ///
 /// #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 /// enum ExampleTag {
@@ -245,7 +264,7 @@ impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
 /// .unwrap();
 /// let now = Utc.with_ymd_and_hms(2026, 10, 16, 12, 0, 0).unwrap();
 /// let amount = Money::<Usd>::from_minor_units(1_000);
-/// let unposted = UnpostedTransaction::builder(now, "A sale")
+/// let unposted = UnpostedTransaction::builder(IdempotencyKey::new("sale-1").unwrap(), now, "A sale")
 ///     .debit(cash, amount, [ExampleTag::Customer(42)])
 ///     .credit(sales, amount, [ExampleTag::Customer(42)])
 ///     .build(&chart, now)
@@ -256,7 +275,10 @@ impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
 ///
 /// ```compile_fail
 /// use chrono::{TimeZone, Utc};
-/// use ledger::{Account, AccountNumber, AccountType, Chart, Money, Tag, TransactionId, UnpostedTransaction, Usd};
+/// use ledger::{
+///     Account, AccountNumber, AccountType, Chart, IdempotencyKey, Money, Tag, TransactionId,
+///     UnpostedTransaction, Usd,
+/// };
 ///
 /// #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 /// enum ExampleTag {
@@ -280,7 +302,7 @@ impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
 /// .unwrap();
 /// let now = Utc.with_ymd_and_hms(2026, 10, 16, 12, 0, 0).unwrap();
 /// let amount = Money::<Usd>::from_minor_units(1_000);
-/// let unposted = UnpostedTransaction::builder(now, "A sale")
+/// let unposted = UnpostedTransaction::builder(IdempotencyKey::new("sale-1").unwrap(), now, "A sale")
 ///     .debit(cash, amount, [ExampleTag::Customer(42)])
 ///     .credit(sales, amount, [ExampleTag::Customer(42)])
 ///     .build(&chart, now)
@@ -298,6 +320,11 @@ impl<C: Currency, T: Tag> PostedTransaction<C, T> {
     /// The ID the ledger gave it when it was posted.
     pub const fn id(&self) -> TransactionId {
         self.id
+    }
+
+    /// The caller's name for this transaction, used to recognise retries.
+    pub const fn idempotency_key(&self) -> &IdempotencyKey {
+        self.transaction.idempotency_key()
     }
 
     /// The transaction this one reverses, if it is a reversal.
@@ -331,6 +358,7 @@ impl<C: Currency, T: Tag> PostedTransaction<C, T> {
 #[derive(Clone, Debug)]
 #[must_use = "a transaction builder does nothing until `.build()` is called"]
 pub struct TransactionBuilder<C: Currency, T: Tag> {
+    idempotency_key: IdempotencyKey,
     effective_at: DateTime<Utc>,
     description: String,
     entries: Vec<Entry<C, T>>,
@@ -432,6 +460,7 @@ impl<C: Currency, T: Tag> TransactionBuilder<C, T> {
             return Err(TransactionError::Unbalanced { debits, credits });
         }
         Ok(UnpostedTransaction {
+            idempotency_key: self.idempotency_key,
             effective_at: self.effective_at,
             description: self.description,
             entries: self.entries,
@@ -589,7 +618,7 @@ mod tests {
     use proptest::prelude::*;
 
     fn builder() -> TransactionBuilder<Usd, TestTag> {
-        UnpostedTransaction::builder(noon(), "Test")
+        UnpostedTransaction::builder(key("test"), noon(), "Test")
     }
 
     /// $10.00 debit to the asset, $10.00 credit to revenue.
@@ -691,7 +720,7 @@ mod tests {
 
     #[test]
     fn accepts_an_empty_description() {
-        let t = UnpostedTransaction::<Usd, TestTag>::builder(noon(), "")
+        let t = UnpostedTransaction::<Usd, TestTag>::builder(key("empty-description"), noon(), "")
             .debit(ASSET, usd(1), [])
             .credit(REVENUE, usd(1), [])
             .build(&chart(), noon())
@@ -1248,7 +1277,7 @@ mod tests {
         entries: &[TestEntry],
         effective_at: DateTime<Utc>,
     ) -> Result<UnpostedTransaction<Usd, TestTag>, TransactionError<Usd>> {
-        let start = UnpostedTransaction::builder(effective_at, "Test");
+        let start = UnpostedTransaction::builder(key("test"), effective_at, "Test");
         entries
             .iter()
             .cloned()

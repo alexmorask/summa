@@ -7,7 +7,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use common::PlaygroundTag::{Customer, Subscription};
 use common::{
     CustomerId, DEFERRED_REVENUE_SUBSCRIPTIONS, PAYMENT_PROVIDER_CLEARING, PlaygroundTag,
-    SALES_TAX_PAYABLE, SubscriptionId, chart_with_sales_tax,
+    SALES_TAX_PAYABLE, SubscriptionId, chart_with_sales_tax, key,
 };
 use ledger::{
     BalanceQuery, Money, PostedTransaction, ReversalError, TransactionId, UnpostedTransaction, Usd,
@@ -28,7 +28,7 @@ const SUBSCRIPTION_9: PlaygroundTag = Subscription(SubscriptionId(9));
 
 /// The spec's charge, tagged to the given customer.
 fn charge(customer: PlaygroundTag) -> UnpostedTransaction<Usd, PlaygroundTag> {
-    UnpostedTransaction::builder(at(9, 30, 15), "Customer buys Pro monthly")
+    UnpostedTransaction::builder(key("charge-42"), at(9, 30, 15), "Customer buys Pro monthly")
         .debit(
             PAYMENT_PROVIDER_CLEARING.number(),
             usd(2_160),
@@ -60,6 +60,7 @@ fn the_wrong_customer_is_corrected_and_nets_to_zero() {
     let t1 = post(charge(CUSTOMER_42), 1, at(9, 30, 15));
     let t2 = post(
         t1.reversal(
+            key("reversal-1"),
             at(10, 2, 9),
             "Reverses 1: wrong customer",
             &chart,
@@ -122,21 +123,25 @@ fn the_wrong_customer_is_corrected_and_nets_to_zero() {
 fn a_reversal_tagged_to_the_wrong_customer_is_rejected() {
     let chart = chart_with_sales_tax();
     let t1 = post(charge(CUSTOMER_42), 1, at(9, 30, 15));
-    let t2 = UnpostedTransaction::builder(at(10, 2, 9), "Reverses 1: wrong customer")
-        .reversing(TransactionId::new(1))
-        .credit(
-            PAYMENT_PROVIDER_CLEARING.number(),
-            usd(2_160),
-            [CUSTOMER_43],
-        )
-        .debit(
-            DEFERRED_REVENUE_SUBSCRIPTIONS.number(),
-            usd(2_000),
-            [CUSTOMER_43, SUBSCRIPTION_9],
-        )
-        .debit(SALES_TAX_PAYABLE.number(), usd(160), [CUSTOMER_43])
-        .build(&chart, at(10, 2, 9))
-        .unwrap();
+    let t2 = UnpostedTransaction::builder(
+        key("wrong-reversal"),
+        at(10, 2, 9),
+        "Reverses 1: wrong customer",
+    )
+    .reversing(TransactionId::new(1))
+    .credit(
+        PAYMENT_PROVIDER_CLEARING.number(),
+        usd(2_160),
+        [CUSTOMER_43],
+    )
+    .debit(
+        DEFERRED_REVENUE_SUBSCRIPTIONS.number(),
+        usd(2_000),
+        [CUSTOMER_43, SUBSCRIPTION_9],
+    )
+    .debit(SALES_TAX_PAYABLE.number(), usd(160), [CUSTOMER_43])
+    .build(&chart, at(10, 2, 9))
+    .unwrap();
 
     assert_eq!(
         t2.check_reversal_of(&t1),

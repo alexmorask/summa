@@ -8,7 +8,12 @@
     reason = "each test file compiles this module separately and uses only part of it"
 )]
 
-use ledger::{Account, AccountNumber, AccountType, Chart, Tag};
+use ledger::{Account, AccountNumber, AccountType, Chart, IdempotencyKey, Tag};
+
+/// A valid idempotency key from text.
+pub fn key(text: &str) -> IdempotencyKey {
+    IdempotencyKey::new(text).unwrap()
+}
 
 pub const CASH: Account = Account::new(AccountNumber::new(1000), "Cash", AccountType::Asset);
 
