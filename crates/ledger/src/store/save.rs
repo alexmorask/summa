@@ -1,6 +1,7 @@
 //! Saving a transaction: all of it, or none of it.
 
 use chrono::SubsecRound;
+use sqlx::PgConnection;
 
 use super::error::SaveError;
 use super::load::load_by_key;
@@ -12,8 +13,9 @@ use crate::money::Usd;
 use crate::transaction::{PostedTransaction, TransactionId, UnpostedTransaction};
 
 /// What one attempt to insert a transaction came to.
-enum Attempt<T: StoredTag> {
-    /// The transaction and all its entries and tags are committed.
+pub(crate) enum Attempt<T: StoredTag> {
+    /// The transaction and all its entries and tags are written (committed
+    /// once the caller commits).
     Inserted(PostedTransaction<Usd, T>),
     /// Another transaction already owns the idempotency key. Nothing was written.
     KeyTaken,
@@ -80,15 +82,33 @@ impl<T: StoredTag> Store<T> {
         Err(SaveError::Unavailable(sqlx::Error::RowNotFound))
     }
 
-    /// One attempt: take an ID, post, and write the transaction row, then the
-    /// entries, then the tags, in one database transaction.
+    /// One attempt: a database transaction around [`Self::insert_on`].
     async fn insert(
         &self,
         transaction: &UnpostedTransaction<Usd, T>,
         recorded_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<Attempt<T>, SaveError> {
         let mut db = self.pool.begin().await.map_err(SaveError::Unavailable)?;
+        let attempt = self.insert_on(&mut db, transaction, recorded_at).await?;
+        match attempt {
+            Attempt::Inserted(_) => db.commit().await.map_err(SaveError::Unavailable)?,
+            // Release the connection before the caller looks the key up.
+            Attempt::KeyTaken => db.rollback().await.map_err(SaveError::Unavailable)?,
+        }
+        Ok(attempt)
+    }
 
+    /// Takes an ID, posts, and writes the transaction row, then the entries,
+    /// then the tags, on `db`, which must be inside a database transaction.
+    /// The caller commits it on `Inserted` and rolls it back on `KeyTaken`
+    /// (or on error). It is a separate method so a test can hold the
+    /// transaction open and force a concurrent save to wait on it.
+    pub(crate) async fn insert_on(
+        &self,
+        db: &mut PgConnection,
+        transaction: &UnpostedTransaction<Usd, T>,
+        recorded_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Attempt<T>, SaveError> {
         let raw_id = sqlx::query_scalar!(r#"SELECT nextval('transaction_ids') AS "id!""#)
             .fetch_one(&mut *db)
             .await
@@ -130,8 +150,6 @@ impl<T: StoredTag> Store<T> {
         .await
         .map_err(SaveError::Unavailable)?;
         if inserted.is_none() {
-            // Release the connection before the caller looks the key up.
-            db.rollback().await.map_err(SaveError::Unavailable)?;
             return Ok(Attempt::KeyTaken);
         }
 
@@ -176,7 +194,6 @@ impl<T: StoredTag> Store<T> {
             }
         }
 
-        db.commit().await.map_err(SaveError::Unavailable)?;
         Ok(Attempt::Inserted(posted))
     }
 }

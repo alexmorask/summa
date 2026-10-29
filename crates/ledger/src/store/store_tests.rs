@@ -7,6 +7,7 @@ use proptest::strategy::{Strategy, ValueTree};
 use proptest::test_runner::TestRunner;
 use sqlx::PgPool;
 
+use super::save::Attempt;
 use super::{CorruptData, LoadError, SaveError, Saved, Store};
 use crate::account::{Account, AccountType, Side};
 use crate::chart::Chart;
@@ -537,4 +538,133 @@ async fn corrupt_stored_row_is_reported(pool: PgPool) {
         }
         other => panic!("expected Corrupt(UnknownTag), got {other:?}"),
     }
+}
+
+/// Counts the backends in this database that are waiting on a lock.
+async fn lock_waiters(pool: &PgPool) -> i64 {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM pg_stat_activity \
+         WHERE datname = current_database() AND wait_event_type = 'Lock'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// Waits until some save is blocked on a lock. Polling is bounded, not timed:
+/// it ends as soon as the interleaving has happened.
+async fn wait_for_lock_waiter(pool: &PgPool) {
+    let polling = async {
+        while lock_waiters(pool).await < 1 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(10), polling)
+        .await
+        .expect("save B never blocked on save A's uncommitted insert");
+}
+
+/// Save A inserts `base()` and stays open; save B of the same transaction
+/// blocks on it. Returns A's posted transaction and B's result, after `finish`
+/// has committed or rolled back A.
+async fn race(
+    pool: &PgPool,
+    finish: impl AsyncFnOnce(sqlx::Transaction<'static, sqlx::Postgres>),
+) -> (
+    crate::transaction::PostedTransaction<Usd, TestTag>,
+    Result<Saved<TestTag>, SaveError>,
+) {
+    let x = base();
+    let store_a = store(pool);
+    let mut a = pool.begin().await.unwrap();
+    let Attempt::Inserted(posted_a) = store_a.insert_on(&mut a, &x, clock_time()).await.unwrap()
+    else {
+        panic!("save A should have inserted");
+    };
+
+    let store_b = store(pool);
+    let b = tokio::spawn(async move { store_b.save(&x).await });
+    wait_for_lock_waiter(pool).await;
+    finish(a).await;
+    (posted_a, b.await.unwrap())
+}
+
+async fn entry_count(pool: &PgPool) -> i64 {
+    sqlx::query_scalar!(r#"SELECT count(*) AS "n!" FROM entries"#)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn tag_count(pool: &PgPool) -> i64 {
+    sqlx::query_scalar!(r#"SELECT count(*) AS "n!" FROM entry_tags"#)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[sqlx::test]
+async fn concurrent_identical_saves_record_once(pool: PgPool) {
+    let (posted_a, b) = race(&pool, async |a| a.commit().await.unwrap()).await;
+    match b {
+        Ok(Saved::AlreadyRecorded(existing)) => assert_eq!(existing.id(), posted_a.id()),
+        other => panic!("expected AlreadyRecorded, got {other:?}"),
+    }
+    assert_eq!(row_count(&pool).await, 1);
+    assert_eq!(entry_count(&pool).await, 2);
+}
+
+#[sqlx::test]
+async fn concurrent_save_after_rollback_records_it(pool: PgPool) {
+    let (_, b) = race(&pool, async |a| a.rollback().await.unwrap()).await;
+    match b {
+        Ok(Saved::Recorded(_)) => {}
+        other => panic!("expected Recorded, got {other:?}"),
+    }
+    assert_eq!(row_count(&pool).await, 1);
+    assert_eq!(entry_count(&pool).await, 2);
+}
+
+#[sqlx::test]
+async fn failure_partway_through_leaves_nothing(pool: PgPool) {
+    sqlx::query(
+        "CREATE FUNCTION fail_on_second_entry() RETURNS trigger AS $$ \
+         BEGIN \
+           IF NEW.position = 1 THEN RAISE EXCEPTION 'test failure'; END IF; \
+           RETURN NEW; \
+         END $$ LANGUAGE plpgsql",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER fail_on_second_entry BEFORE INSERT ON entries \
+         FOR EACH ROW EXECUTE FUNCTION fail_on_second_entry()",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let store = store(&pool);
+    let entries = vec![
+        (ASSET, Side::Debit, 100, vec![TestTag::Alpha(1)]),
+        (REVENUE, Side::Credit, 100, vec![TestTag::Alpha(2)]),
+    ];
+    let failing = build("fails", "Fails", effective(), &entries);
+    assert!(matches!(
+        store.save(&failing).await,
+        Err(SaveError::Unavailable(_))
+    ));
+    assert_eq!(row_count(&pool).await, 0, "transactions");
+    assert_eq!(entry_count(&pool).await, 0, "entries");
+    assert_eq!(tag_count(&pool).await, 0, "entry_tags");
+
+    // Nothing is left over: with the fault removed, a different transaction saves.
+    sqlx::query("DROP TRIGGER fail_on_second_entry ON entries")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let other = build("works", "Works", effective(), &base_entries());
+    assert!(matches!(store.save(&other).await, Ok(Saved::Recorded(_))));
+    assert_eq!(row_count(&pool).await, 1);
 }
