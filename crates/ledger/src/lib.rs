@@ -4,6 +4,7 @@
 mod account;
 mod balance;
 mod chart;
+mod clock;
 mod idempotency;
 mod money;
 mod reversal;
@@ -19,6 +20,9 @@ pub use balance::{
     BalanceError, BalanceQuery, Cutoffs, TrialBalance, TrialBalanceLine, balance, trial_balance,
 };
 pub use chart::{Chart, ChartError};
+#[cfg(feature = "postgres")]
+pub use clock::SystemClock;
+pub use clock::{Clock, FixedClock};
 pub use idempotency::{IdempotencyKey, IdempotencyKeyError};
 pub use money::{Currency, Money, MoneyError, Usd};
 pub use reversal::ReversalError;
