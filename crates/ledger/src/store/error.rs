@@ -30,8 +30,9 @@ pub enum SaveError {
     OriginalNotFound { original: TransactionId },
     /// The transaction isn't a valid reversal of the one it names.
     Reversal(ReversalError<Usd>),
-    /// The database couldn't be reached or failed. Nothing was saved, and it
-    /// is safe to retry with the same key.
+    /// The database couldn't be reached or failed. The transaction may or may
+    /// not have been saved (a commit can succeed on the server and the reply
+    /// be lost). Retrying with the same key is safe.
     Unavailable(sqlx::Error),
     /// Stored data couldn't be read back.
     Corrupt(CorruptData),

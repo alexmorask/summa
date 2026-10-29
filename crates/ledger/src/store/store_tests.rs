@@ -7,11 +7,12 @@ use proptest::strategy::{Strategy, ValueTree};
 use proptest::test_runner::TestRunner;
 use sqlx::PgPool;
 
-use super::{SaveError, Saved, Store};
+use super::{CorruptData, LoadError, SaveError, Saved, Store};
 use crate::account::{Account, AccountType, Side};
 use crate::chart::Chart;
 use crate::clock::FixedClock;
 use crate::money::Usd;
+use crate::reversal::ReversalError;
 use crate::test_support::{
     ASSET, LIABILITY, NOT_IN_CHART, REVENUE, TestEntry, TestTag, chart, key, usd, valid_entries,
 };
@@ -333,5 +334,207 @@ async fn any_valid_transaction_round_trips_and_retries_as_already_recorded(pool:
         assert_eq!(store.load(posted.id()).await.unwrap(), Some(posted.clone()));
         let again = store.save(&transaction).await.unwrap();
         assert_eq!(again, Saved::AlreadyRecorded(posted));
+    }
+}
+
+// --- Reversals ---
+
+/// Saves `base()` and loads it back: the original the reversal tests reverse.
+async fn saved_original(
+    store: &Store<TestTag>,
+) -> crate::transaction::PostedTransaction<Usd, TestTag> {
+    let saved = store.save(&base()).await.unwrap().into_transaction();
+    store.load(saved.id()).await.unwrap().unwrap()
+}
+
+fn reversal_of(
+    original: &crate::transaction::PostedTransaction<Usd, TestTag>,
+    key_text: &str,
+) -> UnpostedTransaction<Usd, TestTag> {
+    original
+        .reversal(
+            key(key_text),
+            effective(),
+            "Reverse",
+            &chart(),
+            clock_time(),
+        )
+        .unwrap()
+}
+
+#[sqlx::test]
+async fn saves_a_valid_reversal(pool: PgPool) {
+    let store = store(&pool);
+    let t1 = saved_original(&store).await;
+    let saved = store.save(&reversal_of(&t1, "reverse-1")).await.unwrap();
+    let Saved::Recorded(posted) = saved else {
+        panic!("expected Recorded, got {saved:?}");
+    };
+    assert_eq!(posted.reverses(), Some(t1.id()));
+    assert_eq!(store.load(posted.id()).await.unwrap(), Some(posted));
+}
+
+#[sqlx::test]
+async fn reversal_of_missing_original_is_rejected(pool: PgPool) {
+    let store = store(&pool);
+    let t1 = saved_original(&store).await;
+    // Build against a transaction with an ID the ledger never assigned.
+    let phantom = build("phantom", "Phantom", effective(), &base_entries())
+        .post(&chart(), TransactionId::new(999), clock_time())
+        .unwrap();
+    let reversal = reversal_of(&phantom, "reverse-missing");
+    match store.save(&reversal).await {
+        Err(error @ SaveError::OriginalNotFound { .. }) => {
+            assert!(!error.is_retryable());
+            let SaveError::OriginalNotFound { original } = error else {
+                unreachable!()
+            };
+            assert_eq!(original, TransactionId::new(999));
+        }
+        other => panic!("expected OriginalNotFound, got {other:?}"),
+    }
+    assert_ne!(t1.id(), TransactionId::new(999));
+    assert_eq!(row_count(&pool).await, 1);
+}
+
+#[sqlx::test]
+async fn reversal_of_id_beyond_bigint_is_original_not_found(pool: PgPool) {
+    let store = store(&pool);
+    let phantom = build("phantom", "Phantom", effective(), &base_entries())
+        .post(&chart(), TransactionId::new(u64::MAX), clock_time())
+        .unwrap();
+    let reversal = reversal_of(&phantom, "reverse-huge");
+    match store.save(&reversal).await {
+        Err(SaveError::OriginalNotFound { original }) => {
+            assert_eq!(original, TransactionId::new(u64::MAX));
+        }
+        other => panic!("expected OriginalNotFound, got {other:?}"),
+    }
+    assert_eq!(row_count(&pool).await, 0);
+}
+
+#[sqlx::test]
+async fn reversal_that_doesnt_mirror_is_rejected(pool: PgPool) {
+    let store = store(&pool);
+    let t1 = saved_original(&store).await;
+    // Same accounts and sides flipped, but 200 cents instead of 100.
+    let not_a_mirror = UnpostedTransaction::builder(key("bad-reverse"), effective(), "Bad")
+        .reversing(t1.id())
+        .credit(ASSET, usd(200), [TestTag::Alpha(1)])
+        .debit(REVENUE, usd(200), [])
+        .build(&chart(), clock_time())
+        .unwrap();
+    match store.save(&not_a_mirror).await {
+        Err(SaveError::Reversal(ReversalError::UnmatchedOriginalEntry { entry })) => {
+            assert_eq!(entry, 0);
+        }
+        other => panic!("expected UnmatchedOriginalEntry, got {other:?}"),
+    }
+    assert_eq!(row_count(&pool).await, 1);
+}
+
+#[sqlx::test]
+async fn reversal_effective_before_original_is_rejected(pool: PgPool) {
+    let store = store(&pool);
+    let t1 = saved_original(&store).await;
+    let early = t1.effective_at() - TimeDelta::seconds(1);
+    let reversal = UnpostedTransaction::builder(key("early-reverse"), early, "Early")
+        .reversing(t1.id())
+        .credit(ASSET, usd(100), [TestTag::Alpha(1)])
+        .debit(REVENUE, usd(100), [])
+        .build(&chart(), clock_time())
+        .unwrap();
+    match store.save(&reversal).await {
+        Err(SaveError::Reversal(ReversalError::EffectiveBeforeOriginal {
+            effective_at,
+            original_effective_at,
+        })) => {
+            assert_eq!(effective_at, early);
+            assert_eq!(original_effective_at, t1.effective_at());
+        }
+        other => panic!("expected EffectiveBeforeOriginal, got {other:?}"),
+    }
+    assert_eq!(row_count(&pool).await, 1);
+}
+
+#[sqlx::test]
+async fn retry_of_a_reversal_is_already_recorded(pool: PgPool) {
+    let store = store(&pool);
+    let t1 = saved_original(&store).await;
+    let reversal = reversal_of(&t1, "reverse-1");
+    let first = store.save(&reversal).await.unwrap().into_transaction();
+    let second = store.save(&reversal).await.unwrap();
+    assert_eq!(second, Saved::AlreadyRecorded(first));
+    assert_eq!(row_count(&pool).await, 2);
+}
+
+#[sqlx::test]
+async fn two_reversals_of_one_transaction_both_save(pool: PgPool) {
+    // "A transaction is reversed at most once" is SUM-10's job (the database
+    // enforces it). Until then both save; SUM-10 flips this test.
+    let store = store(&pool);
+    let t1 = saved_original(&store).await;
+    store.save(&reversal_of(&t1, "reverse-1")).await.unwrap();
+    store.save(&reversal_of(&t1, "reverse-2")).await.unwrap();
+    assert_eq!(row_count(&pool).await, 3);
+}
+
+#[sqlx::test]
+async fn corrupt_stored_row_is_reported(pool: PgPool) {
+    // A balanced transaction whose tag kind the tag type doesn't know. The
+    // deferred balance check passes, so the database accepts it.
+    let mut db = pool.begin().await.unwrap();
+    let id: i64 = sqlx::query_scalar("SELECT nextval('transaction_ids')")
+        .fetch_one(&mut *db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO transactions (id, idempotency_key, description, effective_at, recorded_at) \
+         VALUES ($1, 'corrupt-1', 'Corrupt', $2, $3)",
+    )
+    .bind(id)
+    .bind(effective())
+    .bind(clock_time())
+    .execute(&mut *db)
+    .await
+    .unwrap();
+    for (position, account, side) in [(0_i16, 1_i64, "debit"), (1, 3, "credit")] {
+        sqlx::query(
+            "INSERT INTO entries (transaction_id, position, account, side, amount, currency) \
+             VALUES ($1, $2, $3, $4, 100, 'USD')",
+        )
+        .bind(id)
+        .bind(position)
+        .bind(account)
+        .bind(side)
+        .execute(&mut *db)
+        .await
+        .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO entry_tags (transaction_id, position, kind, value) \
+         VALUES ($1, 0, 'unknown_kind', '7')",
+    )
+    .bind(id)
+    .execute(&mut *db)
+    .await
+    .unwrap();
+    db.commit().await.unwrap();
+
+    let store = store(&pool);
+    match store
+        .load(TransactionId::new(u64::try_from(id).unwrap()))
+        .await
+    {
+        Err(LoadError::Corrupt(CorruptData::UnknownTag {
+            transaction,
+            kind,
+            value,
+        })) => {
+            assert_eq!(transaction, id);
+            assert_eq!(kind, "unknown_kind");
+            assert_eq!(value, "7");
+        }
+        other => panic!("expected Corrupt(UnknownTag), got {other:?}"),
     }
 }

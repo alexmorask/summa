@@ -43,8 +43,18 @@ impl<T: StoredTag> Store<T> {
         // 2. Read the clock once per save, truncated to what the database keeps.
         let recorded_at = self.clock.now().trunc_subsecs(6);
 
-        // 3. Reserved for the reversal check (the next SUM-9 task). Until then
-        //    a reversal is saved without checking its original.
+        // 3. A reversal must mirror an original that is in the ledger. This
+        //    runs outside the database transaction: an original never changes.
+        if let Some(original_id) = transaction.reverses() {
+            // `load` answers None for an ID the database can't hold too.
+            let not_found = SaveError::OriginalNotFound {
+                original: original_id,
+            };
+            let original = self.load(original_id).await?.ok_or(not_found)?;
+            transaction
+                .check_reversal_of(&original)
+                .map_err(SaveError::Reversal)?;
+        }
 
         // 4-6. If the key's owner rolled back between our insert and our look
         //      at it, one more attempt finds the key free.
@@ -96,10 +106,10 @@ impl<T: StoredTag> Store<T> {
             .post(&self.chart, TransactionId::new(id), recorded_at)
             .map_err(SaveError::Rejected)?;
 
+        // Step 3 already found the original, so its ID fits.
         let reverses = posted
             .reverses()
             .map(|original| {
-                // An ID the database can't hold was never assigned.
                 i64::try_from(original.get()).map_err(|_| SaveError::OriginalNotFound { original })
             })
             .transpose()?;
