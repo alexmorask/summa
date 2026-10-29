@@ -75,6 +75,8 @@ impl<C: Currency, T: Tag> Entry<C, T> {
         self.amount
     }
 
+    /// The entry's tags, sorted by kind. `build` puts them in that order, so
+    /// the order the caller gave them in is not kept.
     pub const fn tags(&self) -> &[T] {
         self.tags.as_slice()
     }
@@ -464,6 +466,9 @@ impl<C: Currency, T: Tag> TransactionBuilder<C, T> {
     /// 4. The totals: debits, then credits, each fit in an `i64`; then debits
     ///    equal credits.
     ///
+    /// Each entry's tags are then sorted by kind, so a transaction reads back
+    /// from storage exactly as it was built.
+    ///
     /// An entry problem often explains a bad total, and totals only mean
     /// something once every amount is positive.
     pub fn build(
@@ -503,11 +508,16 @@ impl<C: Currency, T: Tag> TransactionBuilder<C, T> {
         if debits != credits {
             return Err(TransactionError::Unbalanced { debits, credits });
         }
+        // Kinds are unique per entry by now, so this order is total.
+        let mut entries = self.entries;
+        for entry in &mut entries {
+            entry.tags.sort_by_key(Tag::kind);
+        }
         Ok(UnpostedTransaction {
             idempotency_key: self.idempotency_key,
             effective_at: self.effective_at,
             description: self.description,
-            entries: self.entries,
+            entries,
             reverses: self.reverses,
         })
     }
@@ -696,6 +706,19 @@ mod tests {
             .build(&chart(), noon())
             .unwrap();
         assert_eq!(t.entries().len(), 3);
+    }
+
+    #[test]
+    fn build_keeps_tags_sorted_by_kind() {
+        let t = builder()
+            .debit(ASSET, usd(1_000), [TestTag::Beta(1), TestTag::Alpha(2)])
+            .credit(REVENUE, usd(1_000), [])
+            .build(&chart(), noon())
+            .unwrap();
+        assert_eq!(
+            t.entries()[0].tags(),
+            &[TestTag::Alpha(2), TestTag::Beta(1)]
+        );
     }
 
     #[test]

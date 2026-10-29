@@ -193,6 +193,38 @@ async fn same_key_different_tags_is_a_conflict(pool: PgPool) {
 }
 
 #[sqlx::test]
+async fn tags_given_out_of_order_round_trip(pool: PgPool) {
+    let store = store(&pool);
+    let entries = |tags: Vec<TestTag>| {
+        vec![
+            (ASSET, Side::Debit, 100, tags),
+            (REVENUE, Side::Credit, 100, vec![]),
+        ]
+    };
+    let first = build(
+        "tags-1",
+        "Tags",
+        effective(),
+        &entries(vec![TestTag::Beta(1), TestTag::Alpha(2)]),
+    );
+    let Saved::Recorded(posted) = store.save(&first).await.unwrap() else {
+        panic!("expected Recorded");
+    };
+    assert_eq!(store.load(posted.id()).await.unwrap(), Some(posted.clone()));
+
+    let reversed = build(
+        "tags-1",
+        "Tags",
+        effective(),
+        &entries(vec![TestTag::Alpha(2), TestTag::Beta(1)]),
+    );
+    assert_eq!(
+        store.save(&reversed).await.unwrap(),
+        Saved::AlreadyRecorded(posted)
+    );
+}
+
+#[sqlx::test]
 async fn stores_an_amount_of_i64_max(pool: PgPool) {
     let store = store(&pool);
     let entries = vec![
