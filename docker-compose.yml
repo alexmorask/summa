@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: summa
       POSTGRES_DB: summa
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - summa-db:/var/lib/postgresql
     healthcheck:
