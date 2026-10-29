@@ -26,6 +26,8 @@ pub use clock::{Clock, FixedClock};
 pub use idempotency::{IdempotencyKey, IdempotencyKeyError};
 pub use money::{Currency, Money, MoneyError, Usd};
 pub use reversal::ReversalError;
+#[cfg(feature = "postgres")]
+pub use store::{CorruptData, StoredTag};
 pub use tag::Tag;
 pub use transaction::{
     Entry, PostError, PostedTransaction, TransactionBuilder, TransactionError, TransactionId,

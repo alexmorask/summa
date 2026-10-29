@@ -27,6 +27,25 @@ impl Tag for TestTag {
     }
 }
 
+/// Tag values are the decimal `u64`.
+#[cfg(feature = "postgres")]
+impl crate::store::StoredTag for TestTag {
+    fn value(&self) -> String {
+        match self {
+            TestTag::Alpha(n) | TestTag::Beta(n) => n.to_string(),
+        }
+    }
+
+    fn from_stored(kind: &str, value: &str) -> Option<Self> {
+        let n = value.parse().ok()?;
+        match kind {
+            "alpha" => Some(TestTag::Alpha(n)),
+            "beta" => Some(TestTag::Beta(n)),
+            _ => None,
+        }
+    }
+}
+
 pub(crate) const ASSET: AccountNumber = AccountNumber::new(1);
 pub(crate) const LIABILITY: AccountNumber = AccountNumber::new(2);
 pub(crate) const REVENUE: AccountNumber = AccountNumber::new(3);

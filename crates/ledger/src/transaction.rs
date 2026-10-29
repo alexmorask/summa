@@ -45,6 +45,28 @@ pub struct Entry<C: Currency, T: Tag> {
 }
 
 impl<C: Currency, T: Tag> Entry<C, T> {
+    /// Rebuilds an entry from stored data. Storage only: the data was
+    /// validated when it was first written, and loading re-checks each field
+    /// as it parses it.
+    #[cfg(feature = "postgres")]
+    #[allow(
+        dead_code,
+        reason = "the store's load path (a later SUM-9 task) is the first caller"
+    )]
+    pub(crate) const fn from_stored(
+        account: AccountNumber,
+        side: Side,
+        amount: Money<C>,
+        tags: Vec<T>,
+    ) -> Self {
+        Self {
+            account,
+            side,
+            amount,
+            tags,
+        }
+    }
+
     pub const fn account(&self) -> AccountNumber {
         self.account
     }
@@ -317,6 +339,36 @@ pub struct PostedTransaction<C: Currency, T: Tag> {
 }
 
 impl<C: Currency, T: Tag> PostedTransaction<C, T> {
+    /// Rebuilds a posted transaction from stored data. Storage only: it
+    /// doesn't re-run `build` or `post`, because the transaction was checked
+    /// before it was written and stored rows are append-only.
+    #[cfg(feature = "postgres")]
+    #[allow(
+        dead_code,
+        reason = "the store's load path (a later SUM-9 task) is the first caller"
+    )]
+    pub(crate) const fn from_stored(
+        id: TransactionId,
+        key: IdempotencyKey,
+        effective_at: DateTime<Utc>,
+        description: String,
+        reverses: Option<TransactionId>,
+        entries: Vec<Entry<C, T>>,
+        recorded_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            id,
+            transaction: UnpostedTransaction {
+                idempotency_key: key,
+                effective_at,
+                description,
+                entries,
+                reverses,
+            },
+            recorded_at,
+        }
+    }
+
     /// The ID the ledger gave it when it was posted.
     pub const fn id(&self) -> TransactionId {
         self.id
