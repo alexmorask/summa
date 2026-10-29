@@ -77,9 +77,16 @@ mod tests {
 
     #[test]
     fn fixed_clock_is_usable_as_a_trait_object() {
+        fn assert_send_sync<T: Send + Sync + ?Sized>() {}
+        assert_send_sync::<dyn Clock>();
+
         let t = Utc.with_ymd_and_hms(2026, 10, 29, 12, 0, 0).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(FixedClock::new(t));
         assert_eq!(clock.now(), t);
+
+        let shared = Arc::clone(&clock);
+        let from_thread = std::thread::spawn(move || shared.now()).join().unwrap();
+        assert_eq!(from_thread, t);
     }
 
     #[cfg(feature = "postgres")]
