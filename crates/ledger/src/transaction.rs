@@ -49,10 +49,6 @@ impl<C: Currency, T: Tag> Entry<C, T> {
     /// validated when it was first written, and loading re-checks each field
     /// as it parses it.
     #[cfg(feature = "postgres")]
-    #[allow(
-        dead_code,
-        reason = "the store's load path (a later SUM-9 task) is the first caller"
-    )]
     pub(crate) const fn from_stored(
         account: AccountNumber,
         side: Side,
@@ -207,7 +203,7 @@ impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
     /// Private to the ledger crate, so no other crate can post or choose an ID
     /// or a recorded time. Ledger storage calls it.
     #[cfg_attr(
-        not(any(test, feature = "test-support")),
+        not(any(test, feature = "test-support", feature = "postgres")),
         expect(dead_code, reason = "called by ledger storage from M2 (SUM-9)")
     )]
     pub(crate) fn post(
@@ -343,10 +339,6 @@ impl<C: Currency, T: Tag> PostedTransaction<C, T> {
     /// doesn't re-run `build` or `post`, because the transaction was checked
     /// before it was written and stored rows are append-only.
     #[cfg(feature = "postgres")]
-    #[allow(
-        dead_code,
-        reason = "the store's load path (a later SUM-9 task) is the first caller"
-    )]
     pub(crate) const fn from_stored(
         id: TransactionId,
         key: IdempotencyKey,

@@ -1,0 +1,172 @@
+//! Saving a transaction: all of it, or none of it.
+
+use chrono::SubsecRound;
+
+use super::error::SaveError;
+use super::load::load_by_key;
+use super::rows::{CorruptData, CurrencyCode};
+use super::{Saved, Store, StoredTag};
+use crate::account::Side;
+use crate::idempotency::same_contents;
+use crate::money::Usd;
+use crate::transaction::{PostedTransaction, TransactionId, UnpostedTransaction};
+
+/// What one attempt to insert a transaction came to.
+enum Attempt<T: StoredTag> {
+    /// The transaction and all its entries and tags are committed.
+    Inserted(PostedTransaction<Usd, T>),
+    /// Another transaction already owns the idempotency key. Nothing was written.
+    KeyTaken,
+}
+
+impl<T: StoredTag> Store<T> {
+    /// Records `transaction` in the ledger, stamping it with the next ID and
+    /// the clock's time. Everything is written in one database transaction, so
+    /// a failure leaves nothing behind.
+    ///
+    /// Saving the same request again (same key, same contents) records
+    /// nothing new and returns [`Saved::AlreadyRecorded`] with the original.
+    /// Reusing a key for different contents is [`SaveError::Conflict`].
+    ///
+    /// IDs come from a database sequence, so a failed or conflicting save can
+    /// leave a gap in the IDs. That is expected.
+    pub async fn save(
+        &self,
+        transaction: &UnpostedTransaction<Usd, T>,
+    ) -> Result<Saved<T>, SaveError> {
+        // 1. The database keeps microseconds; refuse an effective time it would change.
+        let effective_at = transaction.effective_at();
+        if !effective_at.timestamp_subsec_nanos().is_multiple_of(1_000) {
+            return Err(SaveError::TooPrecise { effective_at });
+        }
+
+        // 2. Read the clock once per save, truncated to what the database keeps.
+        let recorded_at = self.clock.now().trunc_subsecs(6);
+
+        // 3. Reserved for the reversal check (the next SUM-9 task). Until then
+        //    a reversal is saved without checking its original.
+
+        // 4-6. If the key's owner rolled back between our insert and our look
+        //      at it, one more attempt finds the key free.
+        for _ in 0..2 {
+            match self.insert(transaction, recorded_at).await? {
+                Attempt::Inserted(posted) => return Ok(Saved::Recorded(posted)),
+                Attempt::KeyTaken => {
+                    let existing =
+                        load_by_key::<T>(&self.pool, transaction.idempotency_key()).await?;
+                    if let Some(existing) = existing {
+                        return if same_contents(transaction, &existing) {
+                            Ok(Saved::AlreadyRecorded(existing))
+                        } else {
+                            Err(SaveError::Conflict {
+                                key: transaction.idempotency_key().clone(),
+                                existing: existing.id(),
+                            })
+                        };
+                    }
+                }
+            }
+        }
+        Err(SaveError::Unavailable(sqlx::Error::RowNotFound))
+    }
+
+    /// One attempt: take an ID, post, and write the transaction row, then the
+    /// entries, then the tags, in one database transaction.
+    async fn insert(
+        &self,
+        transaction: &UnpostedTransaction<Usd, T>,
+        recorded_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Attempt<T>, SaveError> {
+        let mut db = self.pool.begin().await.map_err(SaveError::Unavailable)?;
+
+        let raw_id = sqlx::query_scalar!(r#"SELECT nextval('transaction_ids') AS "id!""#)
+            .fetch_one(&mut *db)
+            .await
+            .map_err(SaveError::Unavailable)?;
+        let id = u64::try_from(raw_id).map_err(|_| {
+            SaveError::Corrupt(CorruptData::OutOfRange {
+                transaction: raw_id,
+                column: "id",
+                value: raw_id,
+            })
+        })?;
+
+        let posted = transaction
+            .clone()
+            .post(&self.chart, TransactionId::new(id), recorded_at)
+            .map_err(SaveError::Rejected)?;
+
+        let reverses = posted
+            .reverses()
+            .map(|original| {
+                // An ID the database can't hold was never assigned.
+                i64::try_from(original.get()).map_err(|_| SaveError::OriginalNotFound { original })
+            })
+            .transpose()?;
+
+        let inserted = sqlx::query_scalar!(
+            "INSERT INTO transactions (id, idempotency_key, description, effective_at, recorded_at, reverses) \
+             VALUES ($1, $2, $3, $4, $5, $6) \
+             ON CONFLICT (idempotency_key) DO NOTHING \
+             RETURNING id",
+            raw_id,
+            posted.idempotency_key().as_str(),
+            posted.description(),
+            posted.effective_at(),
+            posted.recorded_at(),
+            reverses
+        )
+        .fetch_optional(&mut *db)
+        .await
+        .map_err(SaveError::Unavailable)?;
+        if inserted.is_none() {
+            // Release the connection before the caller looks the key up.
+            db.rollback().await.map_err(SaveError::Unavailable)?;
+            return Ok(Attempt::KeyTaken);
+        }
+
+        for (index, entry) in posted.entries().iter().enumerate() {
+            let position = i16::try_from(index).map_err(|_| {
+                SaveError::Corrupt(CorruptData::OutOfRange {
+                    transaction: raw_id,
+                    column: "position",
+                    value: i64::try_from(index).unwrap_or(i64::MAX),
+                })
+            })?;
+            let side = match entry.side() {
+                Side::Debit => "debit",
+                Side::Credit => "credit",
+            };
+            sqlx::query!(
+                "INSERT INTO entries (transaction_id, position, account, side, amount, currency) \
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+                raw_id,
+                position,
+                i64::from(entry.account().get()),
+                side,
+                entry.amount().minor_units(),
+                CurrencyCode::Usd.as_str()
+            )
+            .execute(&mut *db)
+            .await
+            .map_err(SaveError::Unavailable)?;
+
+            for tag in entry.tags() {
+                sqlx::query!(
+                    "INSERT INTO entry_tags (transaction_id, position, kind, value) \
+                     VALUES ($1, $2, $3, $4)",
+                    raw_id,
+                    position,
+                    tag.kind(),
+                    tag.value()
+                )
+                .execute(&mut *db)
+                .await
+                .map_err(SaveError::Unavailable)?;
+            }
+        }
+
+        db.commit().await.map_err(SaveError::Unavailable)?;
+        Ok(Attempt::Inserted(posted))
+    }
+}

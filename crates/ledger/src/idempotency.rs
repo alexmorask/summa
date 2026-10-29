@@ -111,8 +111,8 @@ impl std::error::Error for IdempotencyKeyError {}
 /// safe because matching is exact equality, so no other pairing could do
 /// better.
 #[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by ledger storage (SUM-9)")
+    not(any(test, feature = "postgres")),
+    expect(dead_code, reason = "called by the PostgreSQL store")
 )]
 pub(crate) fn same_contents<C: Currency, T: Tag>(
     request: &UnpostedTransaction<C, T>,

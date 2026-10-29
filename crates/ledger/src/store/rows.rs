@@ -2,11 +2,6 @@
 //! types. Loading parses every field and reports bad data as [`CorruptData`];
 //! it never panics and never accepts something it can't explain.
 
-#![allow(
-    dead_code,
-    reason = "the store's load path (a later SUM-9 task) is the first caller; remove this then"
-)]
-
 use std::collections::BTreeMap;
 use std::fmt;
 
