@@ -1,7 +1,7 @@
 //! Saving a transaction: all of it, or none of it.
 
 use chrono::SubsecRound;
-use sqlx::PgConnection;
+use sqlx::{Postgres, Transaction};
 
 use super::error::SaveError;
 use super::load::load_by_key;
@@ -123,29 +123,31 @@ impl<T: StoredTag> Store<T> {
         transaction: &UnpostedTransaction<Usd, T>,
         recorded_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<Attempt<T>, SaveError> {
-        let mut db = self.pool.begin().await.map_err(SaveError::from_database)?;
-        let attempt = self.insert_on(&mut db, transaction, recorded_at).await?;
+        let mut tx = self.pool.begin().await.map_err(SaveError::from_database)?;
+        let attempt = self.insert_on(&mut tx, transaction, recorded_at).await?;
         match attempt {
-            Attempt::Inserted(_) => db.commit().await.map_err(SaveError::from_database)?,
+            Attempt::Inserted(_) => tx.commit().await.map_err(SaveError::from_database)?,
             // Release the connection before the caller looks the key up.
-            Attempt::KeyTaken => db.rollback().await.map_err(SaveError::from_database)?,
+            Attempt::KeyTaken => tx.rollback().await.map_err(SaveError::from_database)?,
         }
         Ok(attempt)
     }
 
     /// Takes an ID, posts, and writes the transaction row, then the entries,
-    /// then the tags, on `db`, which must be inside a database transaction.
-    /// The caller commits it on `Inserted` and rolls it back on `KeyTaken`
-    /// (or on error). It is a separate method so a test can hold the
-    /// transaction open and force a concurrent save to wait on it.
+    /// then the tags, inside the database transaction `tx`. The caller
+    /// commits it on `Inserted` and rolls it back on `KeyTaken` (or on
+    /// error). Taking a `Transaction` rather than a bare connection means the
+    /// compiler refuses to run these inserts outside a database transaction.
+    /// It is a separate method so a test can hold the transaction open and
+    /// force a concurrent save to wait on it.
     pub(crate) async fn insert_on(
         &self,
-        db: &mut PgConnection,
+        tx: &mut Transaction<'_, Postgres>,
         transaction: &UnpostedTransaction<Usd, T>,
         recorded_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<Attempt<T>, SaveError> {
         let raw_id = sqlx::query_scalar!(r#"SELECT nextval('transaction_ids') AS "id!""#)
-            .fetch_one(&mut *db)
+            .fetch_one(&mut **tx)
             .await
             .map_err(SaveError::from_database)?;
         let id = u64::try_from(raw_id).map_err(|_| {
@@ -181,7 +183,7 @@ impl<T: StoredTag> Store<T> {
             posted.recorded_at(),
             reverses
         )
-        .fetch_optional(&mut *db)
+        .fetch_optional(&mut **tx)
         .await
         .map_err(SaveError::from_database)?;
         if inserted.is_none() {
@@ -210,7 +212,7 @@ impl<T: StoredTag> Store<T> {
                 entry.amount().minor_units(),
                 CurrencyCode::Usd.as_str()
             )
-            .execute(&mut *db)
+            .execute(&mut **tx)
             .await
             .map_err(SaveError::from_database)?;
 
@@ -223,7 +225,7 @@ impl<T: StoredTag> Store<T> {
                     tag.kind(),
                     tag.value()
                 )
-                .execute(&mut *db)
+                .execute(&mut **tx)
                 .await
                 .map_err(SaveError::from_database)?;
             }
