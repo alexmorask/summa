@@ -5,10 +5,15 @@
 #   SUMMA_BACKUP_DIR  where dumps are written    (default: $HOME/.summa/backups)
 set -euo pipefail
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
-
 SUMMA_DB="${SUMMA_DB:-summa}"
 SUMMA_BACKUP_DIR="${SUMMA_BACKUP_DIR:-$HOME/.summa/backups}"
+# Make the path absolute relative to the caller's directory, before we cd.
+case "$SUMMA_BACKUP_DIR" in
+  /*) ;;
+  *) SUMMA_BACKUP_DIR="$PWD/$SUMMA_BACKUP_DIR" ;;
+esac
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 KEEP=7
 
 mkdir -p "$SUMMA_BACKUP_DIR"
@@ -39,7 +44,12 @@ echo "backup written: $dump"
 # Prune only after the new backup passes its check, so a bad run never costs
 # us older good backups.
 if ! scripts/restore-check.sh "$dump"; then
-  echo "backup FAILED its restore check; older backups were kept: $dump" >&2
+  # Rename so the pair no longer matches summa-*.dump: it must not count toward
+  # the newest $KEEP or be picked as the "newest" dump. Kept for inspection.
+  mv "$dump" "$dump.failed"
+  mv "$count_file" "$count_file.failed"
+  echo "backup FAILED its restore check; kept for inspection: $dump.failed and $count_file.failed" >&2
+  echo "older backups were kept (nothing pruned)" >&2
   exit 1
 fi
 

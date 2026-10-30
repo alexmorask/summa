@@ -79,11 +79,11 @@ The backup is a `pg_dump` snapshot of the `summa` database: consistent as of the
 scripts/backup.sh
 ```
 
-Dumps go to `~/.summa/backups/`, outside the repo, and the newest 7 are kept. After each dump, `scripts/restore-check.sh` restores it into a throwaway database (`summa_restore_check`, dropped afterwards) and checks that it restores without errors, has the same number of transactions as when the dump was taken, and that debits equal credits across all entries. The script prints `restore check passed: N transactions, debits = credits = $X.XX` or the failure, and exits non-zero on failure. Older backups are only deleted after the new one passes. Run the check alone on the newest dump with `scripts/restore-check.sh`.
+Dumps go to `~/.summa/backups/`, outside the repo, and the newest 7 are kept. After each dump, `scripts/restore-check.sh` restores it into a throwaway database (`summa_restore_check`, dropped afterwards) and checks that it restores without errors, has the same number of transactions as when the dump was taken, and that debits equal credits across all entries. The script prints `restore check passed: N transactions, debits = credits = $X.XX` or the failure, and exits non-zero on failure. Older backups are only deleted after the new one passes; a dump that fails is renamed to `.dump.failed` (with `.count.failed`) and kept for inspection, outside the rotation. Run the check alone on the newest dump with `scripts/restore-check.sh`.
 
 ### Nightly job (optional)
 
-The Docker container must be running at 02:00 for the job to work. launchd runs the backup at 02:00, or on wake if the Mac was asleep, and logs to `~/.summa/backups/backup.log`.
+The Docker container must be running at 02:00 for the job to work. Run the commands below from the repo root. launchd runs the backup at 02:00, or on wake if the Mac was asleep, and logs to `~/.summa/backups/backup.log`.
 
 ```sh
 mkdir -p ~/.summa/backups ~/Library/LaunchAgents
@@ -96,10 +96,11 @@ Undo it with `launchctl bootout gui/$(id -u)/com.summa.backup`.
 
 ### Recovering from a backup
 
-Restore the newest dump into a fresh database, then point the app at it:
+Pick the newest `summa-*.dump` (files ending in `.failed` failed their check and are not listed by this pattern), run `scripts/restore-check.sh "$latest"` on it first, then restore it into a fresh database and point the app at it:
 
 ```sh
 latest=$(ls ~/.summa/backups/summa-*.dump | tail -1)
+scripts/restore-check.sh "$latest"
 docker compose exec -T db psql -U summa -d postgres -c 'CREATE DATABASE summa_recovered'
 docker compose exec -T db pg_restore --no-owner -U summa -d summa_recovered < "$latest"
 export DATABASE_URL=postgres://summa:summa@localhost:5433/summa_recovered
@@ -107,4 +108,4 @@ export DATABASE_URL=postgres://summa:summa@localhost:5433/summa_recovered
 
 ### Limits
 
-The dumps sit on the same disk as the database, so losing the machine loses both. Each dump is only as new as the last run, so anything saved since is lost. Recovering to any point in time (continuous archiving of the write-ahead log) is the real-scale design; see Failure 5 in the ledger storage design doc.
+The dumps sit on the same disk as the database, so losing the machine loses both. Each dump is only as new as the last run, so anything saved since is lost. Recovering to any point in time (continuous archiving of the write-ahead log) is the real-scale design: continuous archiving with point-in-time recovery.

@@ -7,9 +7,20 @@
 #   SUMMA_BACKUP_DIR  where dumps live (default: $HOME/.summa/backups)
 set -euo pipefail
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
-
 SUMMA_BACKUP_DIR="${SUMMA_BACKUP_DIR:-$HOME/.summa/backups}"
+# Make paths absolute relative to the caller's directory, before we cd.
+abs_path() {
+  case "$1" in
+    /*) printf '%s\n' "$1" ;;
+    *) printf '%s\n' "$PWD/$1" ;;
+  esac
+}
+SUMMA_BACKUP_DIR="$(abs_path "$SUMMA_BACKUP_DIR")"
+if [[ $# -ge 1 ]]; then
+  set -- "$(abs_path "$1")"
+fi
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 CHECK_DB=summa_restore_check
 
 if [[ $# -ge 1 ]]; then
@@ -62,7 +73,7 @@ fi
 
 actual="$(psql_check -c 'SELECT count(*) FROM transactions')"
 if [[ "$actual" != "$expected" ]]; then
-  echo "restore check FAILED: restored $actual transactions, expected $expected" >&2
+  echo "restore check FAILED: restored $actual transactions, expected $expected (a transaction may have landed between the count and the dump)" >&2
   exit 1
 fi
 
