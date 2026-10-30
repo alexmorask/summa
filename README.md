@@ -71,6 +71,20 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 ```
 
+### Local setup
+
+`cargo test` needs a PostgreSQL database. Install Docker, then:
+
+```sh
+cargo install sqlx-cli --version 0.9.0 --locked --no-default-features --features rustls,postgres
+docker compose up -d --wait
+export DATABASE_URL=postgres://summa:summa@localhost:5433/summa
+sqlx migrate run --source crates/ledger/migrations
+cargo test
+```
+
+The database listens on port 5433. `cargo build` and `cargo clippy` need no database. See [Backups](#backups) for saving and restoring its data.
+
 ## Backups
 
 The backup is a `pg_dump` snapshot of the `summa` database: consistent as of the moment it ran, but not a replica. Needs the Docker container running (`docker compose up -d`).
