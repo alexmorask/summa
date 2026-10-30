@@ -9,7 +9,9 @@ CREATE TABLE transactions (
     -- Always supplied by the application's clock, never by the database.
     recorded_at     timestamptz NOT NULL,
     reverses        bigint      NULL,
-    -- The database transaction that wrote the row; used to order commits.
+    -- The database transaction that wrote the row, stamped at insert. The M3
+    -- balance worker reads in (db_tx_id, id) order behind a safe line; neither
+    -- this nor the id sequence follows commit order.
     db_tx_id        xid8        NOT NULL DEFAULT pg_current_xact_id(),
     CONSTRAINT transactions_pkey PRIMARY KEY (id),
     CONSTRAINT transactions_idempotency_key_unique UNIQUE (idempotency_key),

@@ -29,7 +29,7 @@ Summa serves one concrete business per version, while the ledger core stays gene
 
 ## Status
 
-Early. The ledger core (M1, ledger rules) is in progress. Nothing is deployed; Summa runs locally until the subscription product is complete.
+Early. The ledger rules (M1) are built, and ledger storage in PostgreSQL (M2) is built and under review. Nothing is deployed; Summa runs locally until the subscription product is complete.
 
 ## Roadmap
 
@@ -69,6 +69,7 @@ cargo build
 cargo test
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
+cargo sqlx prepare --workspace --check -- --all-targets --all-features
 ```
 
 ### Local setup
@@ -83,7 +84,7 @@ sqlx migrate run --source crates/ledger/migrations
 cargo test
 ```
 
-The database listens on port 5433. `cargo build` and `cargo clippy` need no database. See [Backups](#backups) for saving and restoring its data.
+The database listens on port 5433, on this machine only. `cargo build` and `cargo clippy` need no database. See [Backups](#backups) for saving and restoring its data.
 
 ## Backups
 

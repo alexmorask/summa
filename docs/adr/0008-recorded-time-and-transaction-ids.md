@@ -18,7 +18,7 @@ The Ledger Core design doc (Failure 8) says recorded time must come from one clo
 - **No database default.** `recorded_at` has no `DEFAULT now()`; the store always supplies it.
 - **Microsecond precision.** PostgreSQL `timestamptz` stores microseconds, so the store truncates the recorded time to microseconds. An effective time with finer precision is rejected (`TooPrecise`), so a retry reads back exactly what was sent and never looks like a conflict.
 - **The clock never goes backwards.** Resetting the demo means starting a fresh database.
-- **Log order does not come from recorded time.** The log is ordered by `(db_tx_id, id)`. Any stamp is taken before commit, so neither a database clock nor an app clock is exact; what must hold is `effective <= recorded` and a clock that doesn't go backwards.
+- **Log order does not come from recorded time.** M3 reads the log in `(db_tx_id, id)` order behind a safe line, because neither `db_tx_id` nor `id` follows commit order. Any stamp is taken before commit, so neither a database clock nor an app clock is exact; what must hold is `effective <= recorded` and a clock that doesn't go backwards.
 - **At real scale** the production clock can itself be backed by the database's clock (asked for the time, then passed in). That keeps Failure 8's single clock source while the demo and tests swap in their own.
 - **IDs are a `bigint` sequence** (`transaction_ids`). The store fetches one and passes it to `post`, so no clock is involved (a UUIDv7 would embed a timestamp). Gaps are fine. The same sequence serves as Failure 6's `sequence`.
 - **Assumes a single primary database.** If writes are ever sharded (by tenant is the natural split), ID generation changes behind the opaque `TransactionId`.

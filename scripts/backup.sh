@@ -6,6 +6,12 @@
 set -euo pipefail
 
 SUMMA_DB="${SUMMA_DB:-summa}"
+# restore-check.sh drops and recreates this database, so never back it up.
+RESTORE_CHECK_DB=summa_restore_check
+if [[ "$SUMMA_DB" == "$RESTORE_CHECK_DB" ]]; then
+  echo "refusing to back up $RESTORE_CHECK_DB: the restore check drops and recreates it" >&2
+  exit 1
+fi
 SUMMA_BACKUP_DIR="${SUMMA_BACKUP_DIR:-$HOME/.summa/backups}"
 # Make the path absolute relative to the caller's directory, before we cd.
 case "$SUMMA_BACKUP_DIR" in

@@ -51,15 +51,17 @@ All five checks must pass before a PR. `cargo build`, `clippy` and `fmt` need no
 - Tests use a fixed, passed-in time, never the system clock.
 - Database tests use `#[sqlx::test]`: a fresh database per test, so the Docker database must be running.
 - Race tests force the interleaving (for example by holding a transaction open); they never fire two threads and hope.
-- Only `ledger`'s own tests may enable `test-support`: it exposes `post`, which only storage should call.
+- Only `ledger`'s own tests may enable `test-support`: it exposes `UnpostedTransaction::post_for_tests`, which only storage should call.
 
 ## Migrations
 
 Migrations are in `crates/ledger/migrations/`, forward-only (`sqlx migrate add`, no `-r`).
 
-- Never edit a migration once committed; fix mistakes with a new one.
-- Never drop a column or table that holds ledger history; deprecate it instead.
-- No backfills: triggers forbid `UPDATE` on ledger tables, so new facts go in new nullable columns, defaults or new tables.
+The strict rules below are the production rule and start at Go live (D14). Before then the dev database holds nothing worth keeping: edit applied migrations, and tear it down and rebuild it (`docker compose down -v && docker compose up -d --wait`, then `sqlx migrate run`) whenever you like.
+
+- From Go live, never edit a migration once applied; fix mistakes with a new one.
+- From Go live, never drop a column or table that holds ledger history; deprecate it instead.
+- No backfills once data exists: triggers forbid `UPDATE` on ledger tables, so new facts go in new nullable columns, defaults or new tables.
 
 ## Conventions
 

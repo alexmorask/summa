@@ -77,6 +77,12 @@ if [[ "$actual" != "$expected" ]]; then
   exit 1
 fi
 
+entry_count="$(psql_check -c 'SELECT count(*) FROM entries')"
+if [[ "$entry_count" == "0" && "$actual" != "0" ]]; then
+  echo "restore check FAILED: restored $actual transactions but 0 entries" >&2
+  exit 1
+fi
+
 # Cents are summed as integers; to_char on a numeric is exact (no floats).
 IFS='|' read -r debits credits dollars < <(psql_check -c "
   SELECT
