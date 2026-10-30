@@ -19,7 +19,7 @@ The full rule set for the ledger core is in the [Ledger Core Spec](https://app.n
 
 A Cargo workspace laid out as a modular monolith (ADR 0002): one app, with each module in its own crate under `crates/`.
 
-- `crates/ledger`: the ledger core.
+- `crates/ledger`: the ledger core. Its `store` module (PostgreSQL storage) sits behind the non-default `postgres` feature; the rules modules never depend on it.
 
 Add a crate only when a milestone needs it.
 
@@ -30,13 +30,18 @@ Release builds keep integer overflow checks on (`overflow-checks = true` in the 
 ## Commands
 
 ```sh
+docker compose up -d --wait   # PostgreSQL 18 on host port 5433
+export DATABASE_URL=postgres://summa:summa@localhost:5433/summa
+sqlx migrate run --source crates/ledger/migrations
+
 cargo build
 cargo test
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
+cargo sqlx prepare --workspace --check -- --all-targets --all-features
 ```
 
-All four must pass before a PR.
+All five checks must pass before a PR. `cargo build`, `clippy` and `fmt` need no database (they use the committed `.sqlx/` query data); `cargo test` needs the Docker database running. Cargo gets `DATABASE_URL` from `.cargo/config.toml`, but the `sqlx` CLI does not read that file, hence the `export`. After changing a query or migration, run `cargo sqlx prepare --workspace -- --all-targets --all-features` and commit `.sqlx/`.
 
 ## Testing
 
@@ -44,6 +49,19 @@ All four must pass before a PR.
 - Rules that must always hold (e.g. every transaction balances) also get property-based tests with `proptest`.
 - If `proptest` records a failure in a `proptest-regressions/` folder, commit it, so the failing case replays on every machine.
 - Tests use a fixed, passed-in time, never the system clock.
+- Database tests use `#[sqlx::test]`: a fresh database per test, so the Docker database must be running.
+- Race tests force the interleaving (for example by holding a transaction open); they never fire two threads and hope.
+- Only `ledger`'s own tests may enable `test-support`: it exposes `UnpostedTransaction::post_for_tests`, which only storage should call.
+
+## Migrations
+
+Migrations are in `crates/ledger/migrations/`, forward-only (`sqlx migrate add`, no `-r`).
+
+The strict rules below are the production rule and start at Go live (D14). Before then the dev database holds nothing worth keeping: edit applied migrations, and tear it down and rebuild it (`docker compose down -v && docker compose up -d --wait`, then `sqlx migrate run`) whenever you like.
+
+- From Go live, never edit a migration once applied; fix mistakes with a new one.
+- From Go live, never drop a column or table that holds ledger history; deprecate it instead.
+- No backfills once data exists: triggers forbid `UPDATE` on ledger tables, so new facts go in new nullable columns, defaults or new tables.
 
 ## Conventions
 

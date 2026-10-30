@@ -8,7 +8,12 @@
     reason = "each test file compiles this module separately and uses only part of it"
 )]
 
-use ledger::{Account, AccountNumber, AccountType, Chart, Tag};
+use ledger::{Account, AccountNumber, AccountType, Chart, IdempotencyKey, StoredTag, Tag};
+
+/// A valid idempotency key from text.
+pub fn key(text: &str) -> IdempotencyKey {
+    IdempotencyKey::new(text).unwrap()
+}
 
 pub const CASH: Account = Account::new(AccountNumber::new(1000), "Cash", AccountType::Asset);
 
@@ -102,6 +107,25 @@ impl Tag for PlaygroundTag {
         match self {
             PlaygroundTag::Customer(_) => "customer",
             PlaygroundTag::Subscription(_) => "subscription",
+        }
+    }
+}
+
+/// The value is the decimal ID inside the `CustomerId` or `SubscriptionId`.
+impl StoredTag for PlaygroundTag {
+    fn value(&self) -> String {
+        match self {
+            PlaygroundTag::Customer(CustomerId(id))
+            | PlaygroundTag::Subscription(SubscriptionId(id)) => id.to_string(),
+        }
+    }
+
+    fn from_stored(kind: &str, value: &str) -> Option<Self> {
+        let id = value.parse().ok()?;
+        match kind {
+            "customer" => Some(PlaygroundTag::Customer(CustomerId(id))),
+            "subscription" => Some(PlaygroundTag::Subscription(SubscriptionId(id))),
+            _ => None,
         }
     }
 }

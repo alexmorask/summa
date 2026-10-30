@@ -29,3 +29,4 @@ The link has to go in one direction, and it has to respect that ledger records n
 - **`post` takes an ID.** Callers of `post` (ledger storage, from M2) supply it.
 - **`TransactionId` wraps a `u64` until SUM-9.** SUM-9 decides how IDs are generated, together with the open question in ADR 0003 about where recorded time comes from; both are stamped at posting by the same part of the ledger.
 - **Finding out whether a transaction T is reversed means searching** for a transaction whose `reverses` is T. The original carries no marker.
+- **Answered by [ADR 0008](0008-recorded-time-and-transaction-ids.md):** IDs come from a database sequence.

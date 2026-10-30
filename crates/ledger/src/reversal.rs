@@ -13,6 +13,7 @@ use chrono::{DateTime, Utc};
 
 use crate::account::Side;
 use crate::chart::Chart;
+use crate::idempotency::IdempotencyKey;
 use crate::money::Currency;
 use crate::tag::Tag;
 use crate::transaction::{
@@ -20,19 +21,22 @@ use crate::transaction::{
 };
 
 impl<C: Currency, T: Tag> PostedTransaction<C, T> {
-    /// Builds the transaction that reverses this one: the same entries in the
-    /// same order, with the sides flipped, linked back to this transaction.
+    /// Builds the transaction that reverses this one, named `key`: the same
+    /// entries in the same order, with the sides flipped, linked back to this
+    /// transaction.
     /// `build`'s checks run against `chart` and `now`, then the result is
     /// checked with [`UnpostedTransaction::check_reversal_of`], which rejects
     /// an `effective_at` before this transaction's.
     pub fn reversal(
         &self,
+        key: IdempotencyKey,
         effective_at: DateTime<Utc>,
         description: impl Into<String>,
         chart: &Chart,
         now: DateTime<Utc>,
     ) -> Result<UnpostedTransaction<C, T>, ReversalError<C>> {
-        let start = UnpostedTransaction::builder(effective_at, description).reversing(self.id());
+        let start =
+            UnpostedTransaction::builder(key, effective_at, description).reversing(self.id());
         let reversal = self
             .entries()
             .iter()
@@ -216,7 +220,7 @@ mod tests {
         link: Option<u64>,
         effective_at: DateTime<Utc>,
     ) -> Result<Unposted, TransactionError<Usd>> {
-        let mut builder = UnpostedTransaction::builder(effective_at, "Reversal");
+        let mut builder = UnpostedTransaction::builder(key("hand-built"), effective_at, "Reversal");
         if let Some(link) = link {
             builder = builder.reversing(id(link));
         }
@@ -258,7 +262,13 @@ mod tests {
     fn builds_the_mirror_image() {
         let original = posted_original();
         let reversal = original
-            .reversal(noon() + day(), "Reverses 1", &chart(), noon() + day())
+            .reversal(
+                key("reversal"),
+                noon() + day(),
+                "Reverses 1",
+                &chart(),
+                noon() + day(),
+            )
             .unwrap();
         let sides: Vec<Side> = reversal.entries().iter().map(|e| e.side()).collect();
         assert_eq!(sides, [Side::Credit, Side::Debit, Side::Debit]);
@@ -274,14 +284,16 @@ mod tests {
 
     #[test]
     fn a_reversal_may_share_the_originals_effective_time() {
-        let result = posted_original().reversal(noon(), "Reverses 1", &chart(), noon());
+        let result =
+            posted_original().reversal(key("reversal"), noon(), "Reverses 1", &chart(), noon());
         assert!(result.is_ok());
     }
 
     #[test]
     fn rejects_a_reversal_effective_before_the_original() {
         let early = noon() - TimeDelta::seconds(1);
-        let result = posted_original().reversal(early, "Reverses 1", &chart(), noon());
+        let result =
+            posted_original().reversal(key("reversal"), early, "Reverses 1", &chart(), noon());
         assert_eq!(
             result,
             Err(ReversalError::EffectiveBeforeOriginal {
@@ -294,8 +306,13 @@ mod tests {
     #[test]
     fn rejects_a_reversal_effective_in_the_future() {
         let now = noon() + TimeDelta::hours(1);
-        let result =
-            posted_original().reversal(noon() + TimeDelta::hours(2), "Reverses 1", &chart(), now);
+        let result = posted_original().reversal(
+            key("reversal"),
+            noon() + TimeDelta::hours(2),
+            "Reverses 1",
+            &chart(),
+            now,
+        );
         assert!(matches!(
             result,
             Err(ReversalError::Transaction(
@@ -311,7 +328,13 @@ mod tests {
             Account::new(LIABILITY, "Liability", AccountType::Liability),
         ])
         .unwrap();
-        let result = posted_original().reversal(noon(), "Reverses 1", &without_revenue, noon());
+        let result = posted_original().reversal(
+            key("reversal"),
+            noon(),
+            "Reverses 1",
+            &without_revenue,
+            noon(),
+        );
         assert_eq!(
             result,
             Err(ReversalError::Transaction(
@@ -327,11 +350,11 @@ mod tests {
     fn a_reversal_can_itself_be_reversed() {
         let original = posted_original();
         let reversal = original
-            .reversal(noon(), "Reverses 1", &chart(), noon())
+            .reversal(key("reversal"), noon(), "Reverses 1", &chart(), noon())
             .unwrap();
         let posted_reversal = reversal.post(&chart(), id(2), noon()).unwrap();
         let again = posted_reversal
-            .reversal(noon(), "Reverses 2", &chart(), noon())
+            .reversal(key("reversal-2"), noon(), "Reverses 2", &chart(), noon())
             .unwrap();
         assert_eq!(again.reverses(), Some(id(2)));
         assert_eq!(again.entries(), original.entries());
@@ -539,7 +562,7 @@ mod tests {
         fn built_reversals_always_pass_the_check(entries in valid_entries()) {
             let original = posted(&entries, 1);
             let reversal = original
-                .reversal(noon(), "Reverses 1", &chart(), noon())
+                .reversal(key("reversal"), noon(), "Reverses 1", &chart(), noon())
                 .map_err(|e| TestCaseError::fail(e.to_string()))?;
             prop_assert_eq!(reversal.check_reversal_of(&original), Ok(()));
         }

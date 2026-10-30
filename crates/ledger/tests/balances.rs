@@ -6,7 +6,7 @@ mod common;
 use chrono::{DateTime, TimeZone, Utc};
 use common::{
     CASH, DEFERRED_REVENUE_SUBSCRIPTIONS, DISCOUNTS_AND_REFUNDS, PAYMENT_PROCESSING_FEES,
-    PAYMENT_PROVIDER_CLEARING, PlaygroundTag, RETAINED_EARNINGS, SUBSCRIPTION_REVENUE,
+    PAYMENT_PROVIDER_CLEARING, PlaygroundTag, RETAINED_EARNINGS, SUBSCRIPTION_REVENUE, key,
     playground_chart,
 };
 use ledger::{
@@ -33,7 +33,7 @@ fn transfer(
     recorded_at: DateTime<Utc>,
 ) -> PostedTransaction<Usd, PlaygroundTag> {
     let chart = playground_chart();
-    UnpostedTransaction::builder(effective_at, "transfer")
+    UnpostedTransaction::builder(key(&format!("transfer-{id}")), effective_at, "transfer")
         .debit(debit, usd(amount), [])
         .credit(credit, usd(amount), [])
         .build(&chart, recorded_at)

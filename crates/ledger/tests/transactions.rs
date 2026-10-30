@@ -7,7 +7,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use common::PlaygroundTag::{Customer, Subscription};
 use common::{
     CustomerId, DEFERRED_REVENUE_SUBSCRIPTIONS, PAYMENT_PROVIDER_CLEARING, PlaygroundTag,
-    SALES_TAX_PAYABLE, SubscriptionId, chart_with_sales_tax, playground_chart,
+    SALES_TAX_PAYABLE, SubscriptionId, chart_with_sales_tax, key, playground_chart,
 };
 use ledger::{Money, Side, TransactionBuilder, TransactionError, UnpostedTransaction, Usd};
 
@@ -25,17 +25,21 @@ const SUBSCRIPTION_9: PlaygroundTag = Subscription(SubscriptionId(9));
 /// The charge's first two entries: $21.60 debited to Payment Provider
 /// Clearing, $20.00 credited to Deferred Revenue: Subscriptions.
 fn charge_without_tax() -> TransactionBuilder<Usd, PlaygroundTag> {
-    UnpostedTransaction::builder(september_30(), "Customer 42 buys Pro monthly")
-        .debit(
-            PAYMENT_PROVIDER_CLEARING.number(),
-            usd(2_160),
-            [CUSTOMER_42],
-        )
-        .credit(
-            DEFERRED_REVENUE_SUBSCRIPTIONS.number(),
-            usd(2_000),
-            [CUSTOMER_42, SUBSCRIPTION_9],
-        )
+    UnpostedTransaction::builder(
+        key("charge-42-pro-monthly"),
+        september_30(),
+        "Customer 42 buys Pro monthly",
+    )
+    .debit(
+        PAYMENT_PROVIDER_CLEARING.number(),
+        usd(2_160),
+        [CUSTOMER_42],
+    )
+    .credit(
+        DEFERRED_REVENUE_SUBSCRIPTIONS.number(),
+        usd(2_000),
+        [CUSTOMER_42, SUBSCRIPTION_9],
+    )
 }
 
 /// The full charge: the two entries above plus $1.60 credited to Sales Tax

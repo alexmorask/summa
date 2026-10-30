@@ -297,7 +297,7 @@ mod tests {
         recorded_at: DateTime<Utc>,
         id: u64,
     ) -> Posted {
-        UnpostedTransaction::builder(effective_at, "Fixture")
+        UnpostedTransaction::builder(key(&format!("fixture-{id}")), effective_at, "Fixture")
             .debit(debit, usd(cents), tags.iter().cloned())
             .credit(credit, usd(cents), tags.iter().cloned())
             .build(&chart(), effective_at)
@@ -655,7 +655,7 @@ mod tests {
             let original = entries
                 .into_iter()
                 .fold(
-                    UnpostedTransaction::builder(noon(), "Original"),
+                    UnpostedTransaction::builder(key("original"), noon(), "Original"),
                     |builder, (account, side, cents, tags)| match side {
                         Side::Debit => builder.debit(account, usd(cents), tags),
                         Side::Credit => builder.credit(account, usd(cents), tags),
@@ -666,7 +666,7 @@ mod tests {
                 .post(&chart(), TransactionId::new(1), noon())
                 .unwrap();
             let reversal = original
-                .reversal(noon(), "Reverses 1", &chart(), noon())
+                .reversal(key("reversal"), noon(), "Reverses 1", &chart(), noon())
                 .unwrap()
                 .post(&chart(), TransactionId::new(2), noon())
                 .unwrap();

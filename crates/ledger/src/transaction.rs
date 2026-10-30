@@ -8,6 +8,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 
 use crate::account::{AccountNumber, Side};
 use crate::chart::Chart;
+use crate::idempotency::IdempotencyKey;
 use crate::money::{Currency, Money, MoneyError};
 use crate::tag::Tag;
 
@@ -44,6 +45,24 @@ pub struct Entry<C: Currency, T: Tag> {
 }
 
 impl<C: Currency, T: Tag> Entry<C, T> {
+    /// Rebuilds an entry from stored data. Storage only: the data was
+    /// validated when it was first written, and loading re-checks each field
+    /// as it parses it.
+    #[cfg(feature = "postgres")]
+    pub(crate) const fn from_stored(
+        account: AccountNumber,
+        side: Side,
+        amount: Money<C>,
+        tags: Vec<T>,
+    ) -> Self {
+        Self {
+            account,
+            side,
+            amount,
+            tags,
+        }
+    }
+
     pub const fn account(&self) -> AccountNumber {
         self.account
     }
@@ -56,6 +75,8 @@ impl<C: Currency, T: Tag> Entry<C, T> {
         self.amount
     }
 
+    /// The entry's tags, sorted by kind. `build` puts them in that order, so
+    /// the order the caller gave them in is not kept.
     pub const fn tags(&self) -> &[T] {
         self.tags.as_slice()
     }
@@ -70,7 +91,9 @@ impl<C: Currency, T: Tag> Entry<C, T> {
 ///
 /// ```
 /// use chrono::{TimeZone, Utc};
-/// use ledger::{Account, AccountNumber, AccountType, Chart, Money, Tag, UnpostedTransaction, Usd};
+/// use ledger::{
+///     Account, AccountNumber, AccountType, Chart, IdempotencyKey, Money, Tag, UnpostedTransaction, Usd,
+/// };
 ///
 /// #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 /// enum ExampleTag {
@@ -97,7 +120,11 @@ impl<C: Currency, T: Tag> Entry<C, T> {
 /// let now = Utc.with_ymd_and_hms(2026, 9, 30, 12, 0, 0).unwrap();
 ///
 /// // $21.60 = $20.00 + $1.60
-/// let sale = UnpostedTransaction::builder(now, "A taxed sale")
+/// let sale = UnpostedTransaction::builder(
+///     IdempotencyKey::new("sale-1").unwrap(),
+///     now,
+///     "A taxed sale",
+/// )
 ///     .debit(receivable, Money::<Usd>::from_minor_units(2_160), [ExampleTag::Customer(42)])
 ///     .credit(revenue, Money::from_minor_units(2_000), [ExampleTag::Customer(42)])
 ///     .credit(tax, Money::from_minor_units(160), [ExampleTag::Customer(42)])
@@ -107,6 +134,7 @@ impl<C: Currency, T: Tag> Entry<C, T> {
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnpostedTransaction<C: Currency, T: Tag> {
+    idempotency_key: IdempotencyKey,
     effective_at: DateTime<Utc>,
     description: String,
     entries: Vec<Entry<C, T>>,
@@ -114,19 +142,28 @@ pub struct UnpostedTransaction<C: Currency, T: Tag> {
 }
 
 impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
-    /// Starts a transaction that happened at `effective_at`, with a
-    /// description for humans. Add entries with `.debit(...)` and
-    /// `.credit(...)`, then check everything with `.build(...)`.
+    /// Starts a transaction named `key` that happened at `effective_at`, with
+    /// a description for humans. The key is how a retry of the same request
+    /// is recognised instead of being recorded twice. Add entries with
+    /// `.debit(...)` and `.credit(...)`, then check everything with
+    /// `.build(...)`.
     pub fn builder(
+        key: IdempotencyKey,
         effective_at: DateTime<Utc>,
         description: impl Into<String>,
     ) -> TransactionBuilder<C, T> {
         TransactionBuilder {
+            idempotency_key: key,
             effective_at,
             description: description.into(),
             entries: Vec::new(),
             reverses: None,
         }
+    }
+
+    /// The caller's name for this transaction, used to recognise retries.
+    pub const fn idempotency_key(&self) -> &IdempotencyKey {
+        &self.idempotency_key
     }
 
     /// When the event happened in the business.
@@ -168,7 +205,7 @@ impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
     /// Private to the ledger crate, so no other crate can post or choose an ID
     /// or a recorded time. Ledger storage calls it.
     #[cfg_attr(
-        not(any(test, feature = "test-support")),
+        not(any(test, feature = "test-support", feature = "postgres")),
         expect(dead_code, reason = "called by ledger storage from M2 (SUM-9)")
     )]
     pub(crate) fn post(
@@ -221,7 +258,9 @@ impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
 ///
 /// ```
 /// use chrono::{TimeZone, Utc};
-/// use ledger::{Account, AccountNumber, AccountType, Chart, Money, Tag, UnpostedTransaction, Usd};
+/// use ledger::{
+///     Account, AccountNumber, AccountType, Chart, IdempotencyKey, Money, Tag, UnpostedTransaction, Usd,
+/// };
 ///
 /// #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 /// enum ExampleTag {
@@ -245,7 +284,7 @@ impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
 /// .unwrap();
 /// let now = Utc.with_ymd_and_hms(2026, 10, 16, 12, 0, 0).unwrap();
 /// let amount = Money::<Usd>::from_minor_units(1_000);
-/// let unposted = UnpostedTransaction::builder(now, "A sale")
+/// let unposted = UnpostedTransaction::builder(IdempotencyKey::new("sale-1").unwrap(), now, "A sale")
 ///     .debit(cash, amount, [ExampleTag::Customer(42)])
 ///     .credit(sales, amount, [ExampleTag::Customer(42)])
 ///     .build(&chart, now)
@@ -256,7 +295,10 @@ impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
 ///
 /// ```compile_fail
 /// use chrono::{TimeZone, Utc};
-/// use ledger::{Account, AccountNumber, AccountType, Chart, Money, Tag, TransactionId, UnpostedTransaction, Usd};
+/// use ledger::{
+///     Account, AccountNumber, AccountType, Chart, IdempotencyKey, Money, Tag, TransactionId,
+///     UnpostedTransaction, Usd,
+/// };
 ///
 /// #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 /// enum ExampleTag {
@@ -280,7 +322,7 @@ impl<C: Currency, T: Tag> UnpostedTransaction<C, T> {
 /// .unwrap();
 /// let now = Utc.with_ymd_and_hms(2026, 10, 16, 12, 0, 0).unwrap();
 /// let amount = Money::<Usd>::from_minor_units(1_000);
-/// let unposted = UnpostedTransaction::builder(now, "A sale")
+/// let unposted = UnpostedTransaction::builder(IdempotencyKey::new("sale-1").unwrap(), now, "A sale")
 ///     .debit(cash, amount, [ExampleTag::Customer(42)])
 ///     .credit(sales, amount, [ExampleTag::Customer(42)])
 ///     .build(&chart, now)
@@ -295,9 +337,40 @@ pub struct PostedTransaction<C: Currency, T: Tag> {
 }
 
 impl<C: Currency, T: Tag> PostedTransaction<C, T> {
+    /// Rebuilds a posted transaction from stored data. Storage only: it
+    /// doesn't re-run `build` or `post`, because the transaction was checked
+    /// before it was written and stored rows are append-only.
+    #[cfg(feature = "postgres")]
+    pub(crate) const fn from_stored(
+        id: TransactionId,
+        key: IdempotencyKey,
+        effective_at: DateTime<Utc>,
+        description: String,
+        reverses: Option<TransactionId>,
+        entries: Vec<Entry<C, T>>,
+        recorded_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            id,
+            transaction: UnpostedTransaction {
+                idempotency_key: key,
+                effective_at,
+                description,
+                entries,
+                reverses,
+            },
+            recorded_at,
+        }
+    }
+
     /// The ID the ledger gave it when it was posted.
     pub const fn id(&self) -> TransactionId {
         self.id
+    }
+
+    /// The caller's name for this transaction, used to recognise retries.
+    pub const fn idempotency_key(&self) -> &IdempotencyKey {
+        self.transaction.idempotency_key()
     }
 
     /// The transaction this one reverses, if it is a reversal.
@@ -331,6 +404,7 @@ impl<C: Currency, T: Tag> PostedTransaction<C, T> {
 #[derive(Clone, Debug)]
 #[must_use = "a transaction builder does nothing until `.build()` is called"]
 pub struct TransactionBuilder<C: Currency, T: Tag> {
+    idempotency_key: IdempotencyKey,
     effective_at: DateTime<Utc>,
     description: String,
     entries: Vec<Entry<C, T>>,
@@ -392,6 +466,9 @@ impl<C: Currency, T: Tag> TransactionBuilder<C, T> {
     /// 4. The totals: debits, then credits, each fit in an `i64`; then debits
     ///    equal credits.
     ///
+    /// Each entry's tags are then sorted by kind, so a transaction reads back
+    /// from storage exactly as it was built.
+    ///
     /// An entry problem often explains a bad total, and totals only mean
     /// something once every amount is positive.
     pub fn build(
@@ -431,10 +508,16 @@ impl<C: Currency, T: Tag> TransactionBuilder<C, T> {
         if debits != credits {
             return Err(TransactionError::Unbalanced { debits, credits });
         }
+        // Kinds are unique per entry by now, so this order is total.
+        let mut entries = self.entries;
+        for entry in &mut entries {
+            entry.tags.sort_by_key(Tag::kind);
+        }
         Ok(UnpostedTransaction {
+            idempotency_key: self.idempotency_key,
             effective_at: self.effective_at,
             description: self.description,
-            entries: self.entries,
+            entries,
             reverses: self.reverses,
         })
     }
@@ -589,7 +672,7 @@ mod tests {
     use proptest::prelude::*;
 
     fn builder() -> TransactionBuilder<Usd, TestTag> {
-        UnpostedTransaction::builder(noon(), "Test")
+        UnpostedTransaction::builder(key("test"), noon(), "Test")
     }
 
     /// $10.00 debit to the asset, $10.00 credit to revenue.
@@ -623,6 +706,19 @@ mod tests {
             .build(&chart(), noon())
             .unwrap();
         assert_eq!(t.entries().len(), 3);
+    }
+
+    #[test]
+    fn build_keeps_tags_sorted_by_kind() {
+        let t = builder()
+            .debit(ASSET, usd(1_000), [TestTag::Beta(1), TestTag::Alpha(2)])
+            .credit(REVENUE, usd(1_000), [])
+            .build(&chart(), noon())
+            .unwrap();
+        assert_eq!(
+            t.entries()[0].tags(),
+            &[TestTag::Alpha(2), TestTag::Beta(1)]
+        );
     }
 
     #[test]
@@ -691,7 +787,7 @@ mod tests {
 
     #[test]
     fn accepts_an_empty_description() {
-        let t = UnpostedTransaction::<Usd, TestTag>::builder(noon(), "")
+        let t = UnpostedTransaction::<Usd, TestTag>::builder(key("empty-description"), noon(), "")
             .debit(ASSET, usd(1), [])
             .credit(REVENUE, usd(1), [])
             .build(&chart(), noon())
@@ -1248,7 +1344,7 @@ mod tests {
         entries: &[TestEntry],
         effective_at: DateTime<Utc>,
     ) -> Result<UnpostedTransaction<Usd, TestTag>, TransactionError<Usd>> {
-        let start = UnpostedTransaction::builder(effective_at, "Test");
+        let start = UnpostedTransaction::builder(key("test"), effective_at, "Test");
         entries
             .iter()
             .cloned()

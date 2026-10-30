@@ -26,6 +26,8 @@ If any code reads the system clock, the simulated clock stops being the whole tr
 
 **Where the ledger's recorded time comes from.** The Ledger Core design doc (Failure 8) says recorded time must come from one clock, the database's, never from the machines running the code. In the demo, the database's clock is real time while effective times come from the simulated clock, so a fast-forwarded transaction would be recorded before it took effect. This is decided in M2 (SUM-9), when transactions are first saved and recorded time is first stamped.
 
+Answered by [ADR 0008](0008-recorded-time-and-transaction-ids.md).
+
 ## Alternatives considered
 
 - **Read the system clock where needed, and mock it in tests:** rejected. Mocking global time is fragile in Rust, and it doesn't help the demo, which needs the running app, not just tests, to follow the simulated clock.
