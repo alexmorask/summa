@@ -26,6 +26,9 @@ pub enum SaveError {
     /// database can't keep. Round-tripping it would change it, so it is
     /// refused.
     TooPrecise { effective_at: DateTime<Utc> },
+    /// The database can never store this input, so retrying repeats the
+    /// failure. `what` names the part that can't be stored.
+    Unstorable { what: &'static str },
     /// The transaction reverses one that isn't in the ledger.
     OriginalNotFound { original: TransactionId },
     /// The transaction isn't a valid reversal of the one it names.
@@ -39,6 +42,24 @@ pub enum SaveError {
 }
 
 impl SaveError {
+    /// Maps a database error from the insert path. A data exception
+    /// (SQLSTATE class `22`, such as text with a NUL or a timestamp out of
+    /// range) will fail the same way every time, so it is `Unstorable`;
+    /// anything else is `Unavailable`.
+    pub(crate) fn from_database(error: sqlx::Error) -> Self {
+        let data_exception = error
+            .as_database_error()
+            .and_then(|db| db.code())
+            .is_some_and(|code| code.starts_with("22"));
+        if data_exception {
+            SaveError::Unstorable {
+                what: "data the database rejected",
+            }
+        } else {
+            SaveError::Unavailable(error)
+        }
+    }
+
     /// Whether trying again with the same transaction might succeed. True only
     /// for [`Unavailable`](Self::Unavailable); every other error repeats.
     pub fn is_retryable(&self) -> bool {
@@ -61,6 +82,9 @@ impl fmt::Display for SaveError {
                 "effective time {} is finer than a microsecond, which the ledger can't store",
                 utc(*effective_at)
             ),
+            SaveError::Unstorable { what } => {
+                write!(f, "the ledger can't store this transaction: {what}")
+            }
             SaveError::OriginalNotFound { original } => write!(
                 f,
                 "the transaction it reverses ({}) is not in the ledger",

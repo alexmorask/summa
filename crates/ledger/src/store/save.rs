@@ -21,6 +21,14 @@ pub(crate) enum Attempt<T: StoredTag> {
     KeyTaken,
 }
 
+/// 4713-01-01 BC: PostgreSQL's lower timestamptz bound, as a year-numbered date.
+fn earliest_storable() -> chrono::DateTime<chrono::Utc> {
+    chrono::NaiveDate::from_ymd_opt(-4712, 1, 1)
+        .and_then(|date| date.and_hms_opt(0, 0, 0))
+        .map(|naive| naive.and_utc())
+        .unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC)
+}
+
 impl<T: StoredTag> Store<T> {
     /// Records `transaction` in the ledger, stamping it with the next ID and
     /// the clock's time. Everything is written in one database transaction, so
@@ -36,8 +44,33 @@ impl<T: StoredTag> Store<T> {
         &self,
         transaction: &UnpostedTransaction<Usd, T>,
     ) -> Result<Saved<T>, SaveError> {
-        // 1. The database keeps microseconds; refuse an effective time it would change.
+        // 0. Refuse input the database can never store, so the error isn't
+        //    mistaken for a retryable outage.
+        if transaction.description().contains('\0') {
+            return Err(SaveError::Unstorable {
+                what: "description contains a NUL byte",
+            });
+        }
+        if transaction
+            .entries()
+            .iter()
+            .flat_map(|entry| entry.tags())
+            .any(|tag| tag.value().contains('\0'))
+        {
+            return Err(SaveError::Unstorable {
+                what: "tag value contains a NUL byte",
+            });
+        }
+        // PostgreSQL's timestamptz starts at 4713 BC (chrono year -4712). Its
+        // upper bound is far beyond chrono's, so only the lower one can bite.
         let effective_at = transaction.effective_at();
+        if effective_at < earliest_storable() {
+            return Err(SaveError::Unstorable {
+                what: "effective time is before 4713 BC",
+            });
+        }
+
+        // 1. The database keeps microseconds; refuse an effective time it would change.
         if !effective_at.timestamp_subsec_nanos().is_multiple_of(1_000) {
             return Err(SaveError::TooPrecise { effective_at });
         }
@@ -58,8 +91,10 @@ impl<T: StoredTag> Store<T> {
                 .map_err(SaveError::Reversal)?;
         }
 
-        // 4-6. If the key's owner rolled back between our insert and our look
-        //      at it, one more attempt finds the key free.
+        // 4-6. Defensive, and should be unreachable: a committed row can't
+        //      vanish, so after `KeyTaken` the lookup shouldn't come back
+        //      empty. A key whose owner rolled back between our insert and our
+        //      look is the one case; the bounded retry is belt and braces.
         for _ in 0..2 {
             match self.insert(transaction, recorded_at).await? {
                 Attempt::Inserted(posted) => return Ok(Saved::Recorded(posted)),
@@ -88,12 +123,12 @@ impl<T: StoredTag> Store<T> {
         transaction: &UnpostedTransaction<Usd, T>,
         recorded_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<Attempt<T>, SaveError> {
-        let mut db = self.pool.begin().await.map_err(SaveError::Unavailable)?;
+        let mut db = self.pool.begin().await.map_err(SaveError::from_database)?;
         let attempt = self.insert_on(&mut db, transaction, recorded_at).await?;
         match attempt {
-            Attempt::Inserted(_) => db.commit().await.map_err(SaveError::Unavailable)?,
+            Attempt::Inserted(_) => db.commit().await.map_err(SaveError::from_database)?,
             // Release the connection before the caller looks the key up.
-            Attempt::KeyTaken => db.rollback().await.map_err(SaveError::Unavailable)?,
+            Attempt::KeyTaken => db.rollback().await.map_err(SaveError::from_database)?,
         }
         Ok(attempt)
     }
@@ -112,7 +147,7 @@ impl<T: StoredTag> Store<T> {
         let raw_id = sqlx::query_scalar!(r#"SELECT nextval('transaction_ids') AS "id!""#)
             .fetch_one(&mut *db)
             .await
-            .map_err(SaveError::Unavailable)?;
+            .map_err(SaveError::from_database)?;
         let id = u64::try_from(raw_id).map_err(|_| {
             SaveError::Corrupt(CorruptData::OutOfRange {
                 transaction: raw_id,
@@ -148,7 +183,7 @@ impl<T: StoredTag> Store<T> {
         )
         .fetch_optional(&mut *db)
         .await
-        .map_err(SaveError::Unavailable)?;
+        .map_err(SaveError::from_database)?;
         if inserted.is_none() {
             return Ok(Attempt::KeyTaken);
         }
@@ -177,7 +212,7 @@ impl<T: StoredTag> Store<T> {
             )
             .execute(&mut *db)
             .await
-            .map_err(SaveError::Unavailable)?;
+            .map_err(SaveError::from_database)?;
 
             for tag in entry.tags() {
                 sqlx::query!(
@@ -190,7 +225,7 @@ impl<T: StoredTag> Store<T> {
                 )
                 .execute(&mut *db)
                 .await
-                .map_err(SaveError::Unavailable)?;
+                .map_err(SaveError::from_database)?;
             }
         }
 

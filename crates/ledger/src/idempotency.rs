@@ -42,7 +42,9 @@ impl IdempotencyKey {
     /// 1. It must not be empty.
     /// 2. It must not start or end with whitespace
     ///    ([`char::is_whitespace`]).
-    /// 3. It must be at most [`MAX_LENGTH`](Self::MAX_LENGTH) bytes.
+    /// 3. It must not contain a NUL (`'\0'`) character, which PostgreSQL
+    ///    text can't hold.
+    /// 4. It must be at most [`MAX_LENGTH`](Self::MAX_LENGTH) bytes.
     pub fn new(key: impl Into<String>) -> Result<Self, IdempotencyKeyError> {
         let key = key.into();
         if key.is_empty() {
@@ -50,6 +52,9 @@ impl IdempotencyKey {
         }
         if key.starts_with(char::is_whitespace) || key.ends_with(char::is_whitespace) {
             return Err(IdempotencyKeyError::SurroundingWhitespace);
+        }
+        if key.contains('\0') {
+            return Err(IdempotencyKeyError::ContainsNul);
         }
         if key.len() > Self::MAX_LENGTH {
             return Err(IdempotencyKeyError::TooLong { length: key.len() });
@@ -78,6 +83,8 @@ pub enum IdempotencyKeyError {
     TooLong { length: usize },
     /// The key starts or ends with whitespace.
     SurroundingWhitespace,
+    /// The key contains a NUL (`'\0'`) character, which the database can't store.
+    ContainsNul,
 }
 
 impl fmt::Display for IdempotencyKeyError {
@@ -91,6 +98,9 @@ impl fmt::Display for IdempotencyKeyError {
             ),
             IdempotencyKeyError::SurroundingWhitespace => {
                 write!(f, "the idempotency key starts or ends with whitespace")
+            }
+            IdempotencyKeyError::ContainsNul => {
+                write!(f, "the idempotency key contains a NUL byte")
             }
         }
     }
@@ -206,8 +216,31 @@ mod tests {
     }
 
     #[test]
-    fn checks_emptiness_before_whitespace_before_length() {
+    fn key_with_nul_is_rejected() {
+        for text in ["a\0b", "\0", "a\0"] {
+            assert_eq!(
+                IdempotencyKey::new(text),
+                Err(IdempotencyKeyError::ContainsNul),
+                "{text:?}"
+            );
+        }
+        assert_eq!(
+            IdempotencyKeyError::ContainsNul.to_string(),
+            "the idempotency key contains a NUL byte"
+        );
+    }
+
+    #[test]
+    fn checks_emptiness_before_whitespace_before_nul_before_length() {
         assert_eq!(IdempotencyKey::new(""), Err(IdempotencyKeyError::Empty));
+        assert_eq!(
+            IdempotencyKey::new(" \0"),
+            Err(IdempotencyKeyError::SurroundingWhitespace)
+        );
+        assert_eq!(
+            IdempotencyKey::new(format!("{}\0", "a".repeat(300))),
+            Err(IdempotencyKeyError::ContainsNul)
+        );
         assert_eq!(
             IdempotencyKey::new(format!("{} ", "a".repeat(300))),
             Err(IdempotencyKeyError::SurroundingWhitespace)

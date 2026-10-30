@@ -8,12 +8,13 @@ use proptest::test_runner::TestRunner;
 use sqlx::PgPool;
 
 use super::save::Attempt;
-use super::{CorruptData, LoadError, SaveError, Saved, Store};
+use super::{CorruptData, LoadError, SaveError, Saved, Store, StoredTag};
 use crate::account::{Account, AccountType, Side};
 use crate::chart::Chart;
 use crate::clock::FixedClock;
 use crate::money::Usd;
 use crate::reversal::ReversalError;
+use crate::tag::Tag;
 use crate::test_support::{
     ASSET, LIABILITY, NOT_IN_CHART, REVENUE, TestEntry, TestTag, chart, key, usd, valid_entries,
 };
@@ -309,6 +310,148 @@ async fn ids_come_from_the_sequence(pool: PgPool) {
     let other = build("renewal-2", "Renewal", effective(), &base_entries());
     let second = store.save(&other).await.unwrap().into_transaction();
     assert!(first.id() < second.id());
+}
+
+/// A tag carrying free text, to put awkward values through the database.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum TextTag {
+    Note(String),
+}
+
+impl Tag for TextTag {
+    fn kind(&self) -> &'static str {
+        "note"
+    }
+}
+
+impl StoredTag for TextTag {
+    fn value(&self) -> String {
+        let Self::Note(text) = self;
+        text.clone()
+    }
+
+    fn from_stored(kind: &str, value: &str) -> Option<Self> {
+        (kind == "note").then(|| Self::Note(value.to_string()))
+    }
+}
+
+/// Debit asset (tagged with the first note, if any), credit revenue (tagged
+/// with the second): 100 cents. An entry holds one tag per kind.
+fn text_tagged(
+    key_text: &str,
+    description: &str,
+    effective_at: DateTime<Utc>,
+    notes: &[&str],
+) -> UnpostedTransaction<Usd, TextTag> {
+    let tag = |i: usize| {
+        notes
+            .get(i)
+            .map(|n| TextTag::Note((*n).to_string()))
+            .into_iter()
+            .collect::<Vec<_>>()
+    };
+    UnpostedTransaction::builder(key(key_text), effective_at, description)
+        .debit(ASSET, usd(100), tag(0))
+        .credit(REVENUE, usd(100), tag(1))
+        .build(&chart(), clock_time())
+        .unwrap()
+}
+
+fn text_store(pool: &PgPool) -> Store<TextTag> {
+    Store::new(
+        pool.clone(),
+        chart(),
+        Arc::new(FixedClock::new(clock_time())),
+    )
+}
+
+/// Asserts the save is refused as unstorable (naming `what`), is not
+/// retryable, and wrote nothing.
+async fn assert_unstorable(
+    pool: &PgPool,
+    transaction: &UnpostedTransaction<Usd, TextTag>,
+    what: &str,
+) {
+    match text_store(pool).save(transaction).await {
+        Err(error @ SaveError::Unstorable { .. }) => {
+            assert!(!error.is_retryable());
+            assert!(error.to_string().contains(what), "{error}");
+        }
+        other => panic!("expected Unstorable, got {other:?}"),
+    }
+    assert_eq!(row_count(pool).await, 0);
+}
+
+#[sqlx::test]
+async fn description_with_nul_is_unstorable_and_not_retryable(pool: PgPool) {
+    let transaction = text_tagged("nul-1", "bad\0text", effective(), &[]);
+    assert_unstorable(&pool, &transaction, "description contains a NUL byte").await;
+}
+
+#[sqlx::test]
+async fn tag_value_with_nul_is_unstorable(pool: PgPool) {
+    let transaction = text_tagged("nul-2", "Fine", effective(), &["ok", "a\0b"]);
+    assert_unstorable(&pool, &transaction, "tag value contains a NUL byte").await;
+}
+
+#[sqlx::test]
+async fn effective_time_before_4713_bc_is_unstorable(pool: PgPool) {
+    // 4713 BC is year -4712 in chrono's astronomical numbering.
+    let earliest = Utc.with_ymd_and_hms(-4712, 1, 1, 0, 0, 0).unwrap();
+    let too_early = earliest - TimeDelta::seconds(1);
+    let transaction = text_tagged("early-1", "Ancient", too_early, &[]);
+    assert_unstorable(&pool, &transaction, "effective time is before 4713 BC").await;
+
+    // The boundary itself is storable and round-trips.
+    let at_bound = text_tagged("early-2", "Boundary", earliest, &[]);
+    let store = text_store(&pool);
+    let posted = store.save(&at_bound).await.unwrap().into_transaction();
+    assert_eq!(store.load(posted.id()).await.unwrap(), Some(posted));
+}
+
+#[sqlx::test]
+async fn database_data_exceptions_are_unstorable_not_unavailable(pool: PgPool) {
+    // PostgreSQL text can't hold NUL: SQLSTATE 22021, class 22.
+    let error = sqlx::query("SELECT $1::text")
+        .bind("a\0b")
+        .fetch_one(&pool)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        SaveError::from_database(error),
+        SaveError::Unstorable { .. }
+    ));
+
+    // Anything else stays retryable.
+    assert!(SaveError::from_database(sqlx::Error::PoolTimedOut).is_retryable());
+}
+
+#[sqlx::test]
+async fn text_with_separators_and_case_round_trip_through_the_database(pool: PgPool) {
+    let store = text_store(&pool);
+    let transaction = text_tagged(
+        "text-1",
+        "Colons: and \u{e9}",
+        effective(),
+        &["a:b", "\u{e9}"],
+    );
+    let posted = store.save(&transaction).await.unwrap().into_transaction();
+    let loaded = store.load(posted.id()).await.unwrap().unwrap();
+    assert_eq!(loaded, posted);
+    assert_eq!(loaded.description(), "Colons: and \u{e9}");
+}
+
+#[sqlx::test]
+async fn keys_differing_only_in_case_are_different_transactions(pool: PgPool) {
+    let store = store(&pool);
+    for key_text in ["charge-1", "Charge-1"] {
+        let transaction = build(key_text, "Charge", effective(), &base_entries());
+        assert!(matches!(
+            store.save(&transaction).await.unwrap(),
+            Saved::Recorded(_)
+        ));
+    }
+    assert_eq!(row_count(&pool).await, 2);
 }
 
 #[test]
