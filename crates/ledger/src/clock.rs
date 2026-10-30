@@ -1,6 +1,8 @@
 //! The clock: where "now" comes from. The ledger never reads the system clock
 //! itself; the app's edge hands it a `Clock` (ADR 0003).
 
+#[cfg(feature = "postgres")]
+use chrono::SubsecRound;
 use chrono::{DateTime, Utc};
 
 /// A source of the current time.
@@ -24,6 +26,11 @@ use chrono::{DateTime, Utc};
 /// ```
 pub trait Clock: Send + Sync {
     /// The current time, in UTC.
+    ///
+    /// An implementation that feeds the store returns whole microseconds. The
+    /// store truncates `recorded_at` itself, but it rejects an `effective_at`
+    /// finer than a microsecond (the database can't keep it), so a clock that
+    /// supplies effective times must not return nanoseconds.
     fn now(&self) -> DateTime<Utc>;
 }
 
@@ -45,7 +52,7 @@ impl Clock for FixedClock {
     }
 }
 
-/// The real clock: the system's time in UTC. The only place in the ledger
+/// The real clock: the system's time in UTC, truncated to whole microseconds. The only place in the ledger
 /// that reads the system clock (ADR 0003).
 #[cfg(feature = "postgres")]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -55,7 +62,9 @@ pub struct SystemClock;
 impl Clock for SystemClock {
     #[allow(clippy::disallowed_methods, reason = "the one real clock (ADR 0003)")]
     fn now(&self) -> DateTime<Utc> {
-        Utc::now()
+        // Whole microseconds: Linux reports nanoseconds, which the store
+        // would reject as an effective time (see `Clock::now`).
+        Utc::now().trunc_subsecs(6)
     }
 }
 
@@ -87,6 +96,14 @@ mod tests {
         let shared = Arc::clone(&clock);
         let from_thread = std::thread::spawn(move || shared.now()).join().unwrap();
         assert_eq!(from_thread, t);
+    }
+
+    #[cfg(feature = "postgres")]
+    #[test]
+    fn system_clock_returns_whole_microseconds() {
+        for _ in 0..100 {
+            assert_eq!(SystemClock.now().timestamp_subsec_nanos() % 1000, 0);
+        }
     }
 
     #[cfg(feature = "postgres")]
