@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use chrono::SubsecRound;
 use sqlx::{Postgres, Transaction};
 
-use super::error::{SaveError, violates};
+use super::error::SaveError;
 use super::load::load_by_key;
 use super::rows::{CorruptData, CurrencyCode, account_type_text, parse_account_type};
 use super::{Saved, Store, StoredTag};
@@ -209,12 +209,7 @@ impl<T: StoredTag> Store<T> {
         )
         .fetch_optional(&mut **tx)
         .await
-        .map_err(|e| match posted.reverses() {
-            Some(original) if violates(&e, "transactions_reverses_unique") => {
-                SaveError::AlreadyReversed { original }
-            }
-            _ => SaveError::from_database(e),
-        })?;
+        .map_err(|e| SaveError::from_transaction_insert(e, posted.reverses()))?;
         if inserted.is_none() {
             return Ok(Attempt::KeyTaken);
         }
@@ -283,29 +278,30 @@ impl<T: StoredTag> Store<T> {
 
         // Ascending order (see `accounts_to_record`); the UNNEST insert below
         // preserves array order, so concurrent saves lock rows in the same order.
-        let mut accounts = Vec::with_capacity(pending.len());
-        let mut numbers = Vec::with_capacity(pending.len());
-        let mut types = Vec::with_capacity(pending.len());
-        let mut contras = Vec::with_capacity(pending.len());
-        for number in &pending {
-            // `post` has already confirmed every account is in the chart, so
-            // this is unreachable; it is still a rejection, never a retry.
-            let account = self.chart.get(*number).ok_or_else(|| {
-                let entry = posted
-                    .entries()
-                    .iter()
-                    .position(|entry| entry.account() == *number)
-                    .unwrap_or(0);
-                SaveError::Rejected(PostError::UnknownAccount {
-                    entry,
-                    account: *number,
+        // `post` has already confirmed every account is in the chart, so a miss
+        // is unreachable; it is still a rejection, never a retry.
+        let accounts = pending
+            .iter()
+            .map(|number| {
+                self.chart.get(*number).ok_or_else(|| {
+                    let entry = posted
+                        .entries()
+                        .iter()
+                        .position(|entry| entry.account() == *number)
+                        .unwrap_or(0);
+                    SaveError::Rejected(PostError::UnknownAccount {
+                        entry,
+                        account: *number,
+                    })
                 })
-            })?;
-            accounts.push(account);
-            numbers.push(i64::from(number.get()));
-            types.push(account_type_text(account.account_type()));
-            contras.push(account.is_contra());
-        }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let numbers: Vec<i64> = pending.iter().map(|n| i64::from(n.get())).collect();
+        let types: Vec<&str> = accounts
+            .iter()
+            .map(|a| account_type_text(a.account_type()))
+            .collect();
+        let contras: Vec<bool> = accounts.iter().map(|a| a.is_contra()).collect();
 
         sqlx::query!(
             "INSERT INTO recorded_accounts (number, account_type, contra) \

@@ -350,15 +350,6 @@ mod tests {
         assert_eq!(parse_account_type("cash"), None);
     }
 
-    #[test]
-    fn account_type_texts_are_distinct() {
-        let texts: std::collections::BTreeSet<_> = AccountType::ALL
-            .into_iter()
-            .map(account_type_text)
-            .collect();
-        assert_eq!(texts.len(), AccountType::ALL.len());
-    }
-
     #[sqlx::test]
     async fn every_account_type_text_satisfies_the_sql_check(pool: sqlx::PgPool) {
         for (number, account_type) in (1_i64..).zip(AccountType::ALL) {

@@ -53,9 +53,13 @@ pub enum SaveError {
     Corrupt(CorruptData),
 }
 
+/// The unique constraint that lets a transaction be reversed at most once
+/// (named in the migration).
+const REVERSES_UNIQUE: &str = "transactions_reverses_unique";
+
 /// Whether `error` is a database error that violated the constraint named
 /// `constraint`.
-pub(crate) fn violates(error: &sqlx::Error, constraint: &str) -> bool {
+fn violates(error: &sqlx::Error, constraint: &str) -> bool {
     error
         .as_database_error()
         .and_then(|db| db.constraint())
@@ -88,6 +92,22 @@ impl SaveError {
             }
         } else {
             SaveError::Unavailable(error)
+        }
+    }
+
+    /// Maps a database error from the `transactions` insert. A second reversal
+    /// of `reverses` violates the unique constraint on that column, which is
+    /// [`AlreadyReversed`](Self::AlreadyReversed); anything else is as in
+    /// [`from_database`](Self::from_database).
+    pub(crate) fn from_transaction_insert(
+        error: sqlx::Error,
+        reverses: Option<TransactionId>,
+    ) -> Self {
+        match reverses {
+            Some(original) if violates(&error, REVERSES_UNIQUE) => {
+                SaveError::AlreadyReversed { original }
+            }
+            _ => SaveError::from_database(error),
         }
     }
 

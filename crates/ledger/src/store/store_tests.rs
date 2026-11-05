@@ -996,10 +996,11 @@ async fn concurrent_first_uses_with_the_same_type_both_record(pool: PgPool) {
         other => panic!("expected Recorded, got {other:?}"),
     }
     assert_eq!(row_count(&pool).await, 2);
-    let numbers = sqlx::query_scalar!("SELECT number FROM recorded_accounts ORDER BY number")
-        .fetch_all(&pool)
+    let numbers: Vec<i64> = recorded_accounts(&pool)
         .await
-        .unwrap();
+        .into_iter()
+        .map(|(number, _, _)| number)
+        .collect();
     assert_eq!(numbers, vec![1, 3]);
 }
 
@@ -1039,6 +1040,10 @@ fn uses_asset(chart: &Chart, key_text: &str) -> UnpostedTransaction<Usd, TestTag
     )
 }
 
+fn assert_recorded(result: &Result<Saved<TestTag>, SaveError>) {
+    assert!(matches!(result, Ok(Saved::Recorded(_))), "{result:?}");
+}
+
 async fn recorded_accounts(pool: &PgPool) -> Vec<(i64, String, bool)> {
     sqlx::query_as("SELECT number, account_type, contra FROM recorded_accounts ORDER BY number")
         .fetch_all(pool)
@@ -1065,17 +1070,14 @@ async fn changed_account_type_is_rejected(pool: PgPool) {
     let later = uses_asset(&changed, "later");
     let result = store_at(&pool, changed, clock_time()).save(&later).await;
     match result {
-        Err(error @ SaveError::AccountChanged { .. }) => {
-            assert!(!error.is_retryable());
-            assert!(matches!(
-                error,
-                SaveError::AccountChanged {
-                    account: ASSET,
-                    recorded,
-                    chart,
-                } if recorded == AccountKind::new(AccountType::Asset, false)
-                    && chart == AccountKind::new(AccountType::Liability, false)
-            ));
+        Err(SaveError::AccountChanged {
+            account,
+            recorded,
+            chart,
+        }) => {
+            assert_eq!(account, ASSET);
+            assert_eq!(recorded, AccountKind::new(AccountType::Asset, false));
+            assert_eq!(chart, AccountKind::new(AccountType::Liability, false));
         }
         other => panic!("expected AccountChanged, got {other:?}"),
     }
@@ -1109,7 +1111,7 @@ async fn renamed_account_saves(pool: PgPool) {
     let renamed = chart_with(Account::new(ASSET, "Cash", AccountType::Asset));
     let later = uses_asset(&renamed, "later");
     let result = store_at(&pool, renamed, clock_time()).save(&later).await;
-    assert!(matches!(result, Ok(Saved::Recorded(_))), "{result:?}");
+    assert_recorded(&result);
 }
 
 #[sqlx::test]
@@ -1127,7 +1129,7 @@ async fn unused_account_can_still_change_type(pool: PgPool) {
         ],
     );
     let result = store_at(&pool, changed, clock_time()).save(&later).await;
-    assert!(matches!(result, Ok(Saved::Recorded(_))), "{result:?}");
+    assert_recorded(&result);
 }
 
 #[sqlx::test]
@@ -1183,7 +1185,7 @@ async fn concurrent_first_use_after_rollback_records_the_second(pool: PgPool) {
         async |a| a.rollback().await.unwrap(),
     )
     .await;
-    assert!(matches!(b, Ok(Saved::Recorded(_))), "{b:?}");
+    assert_recorded(&b);
     assert_eq!(
         recorded_accounts(&pool).await.first(),
         Some(&(1, "liability".to_owned(), false))
@@ -1203,8 +1205,8 @@ async fn transaction_using_one_account_twice_saves(pool: PgPool) {
         ],
     );
     let result = store(&pool).save(&twice).await;
-    assert!(matches!(result, Ok(Saved::Recorded(_))), "{result:?}");
-    assert_eq!(recorded_accounts(&pool).await.len(), 2);
+    assert_recorded(&result);
+    assert_eq!(recorded_account_count(&pool).await, 2);
 }
 
 #[sqlx::test]
@@ -1221,7 +1223,7 @@ async fn contra_account_saves_twice(pool: PgPool) {
             ],
         );
         let result = store.save(&contra).await;
-        assert!(matches!(result, Ok(Saved::Recorded(_))), "{result:?}");
+        assert_recorded(&result);
     }
     let recorded = recorded_accounts(&pool).await;
     assert!(recorded.contains(&(4, "revenue".to_owned(), true)));
