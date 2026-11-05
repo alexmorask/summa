@@ -15,7 +15,7 @@ mod tag;
 mod test_support;
 mod transaction;
 
-pub use account::{Account, AccountNumber, AccountType, Permanence, Side};
+pub use account::{Account, AccountKind, AccountNumber, AccountType, Permanence, Side};
 pub use balance::{
     BalanceError, BalanceQuery, Cutoffs, TrialBalance, TrialBalanceLine, balance, trial_balance,
 };

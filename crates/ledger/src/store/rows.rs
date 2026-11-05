@@ -79,14 +79,9 @@ pub(crate) const fn account_type_text(account_type: AccountType) -> &'static str
 
 /// The account type a stored text names, if it names one.
 pub(crate) fn parse_account_type(text: &str) -> Option<AccountType> {
-    match text {
-        "asset" => Some(AccountType::Asset),
-        "liability" => Some(AccountType::Liability),
-        "equity" => Some(AccountType::Equity),
-        "revenue" => Some(AccountType::Revenue),
-        "expense" => Some(AccountType::Expense),
-        _ => None,
-    }
+    AccountType::ALL
+        .into_iter()
+        .find(|account_type| account_type_text(*account_type) == text)
 }
 
 /// Why stored rows couldn't become a transaction. The database's constraints
@@ -114,6 +109,8 @@ pub enum CorruptData {
     },
     /// A recorded account's type isn't one the ledger knows.
     UnknownAccountType { account: i64, value: String },
+    /// An account has no `recorded_accounts` row right after it was recorded.
+    MissingRecordedAccount { account: i64 },
     /// The stored idempotency key isn't a valid key.
     InvalidIdempotencyKey { transaction: i64, key: String },
     /// Two entry rows share a position.
@@ -156,6 +153,10 @@ impl fmt::Display for CorruptData {
             CorruptData::UnknownAccountType { account, value } => write!(
                 f,
                 "corrupt data in recorded account {account}: unknown type {value:?}"
+            ),
+            CorruptData::MissingRecordedAccount { account } => write!(
+                f,
+                "corrupt data in recorded account {account}: no row after recording it"
             ),
             CorruptData::InvalidIdempotencyKey { transaction, key } => write!(
                 f,
@@ -335,6 +336,40 @@ mod tests {
             position,
             kind: kind.to_string(),
             value: value.to_string(),
+        }
+    }
+
+    #[test]
+    fn every_account_type_round_trips_through_its_text() {
+        for account_type in AccountType::ALL {
+            assert_eq!(
+                parse_account_type(account_type_text(account_type)),
+                Some(account_type)
+            );
+        }
+        assert_eq!(parse_account_type("cash"), None);
+    }
+
+    #[test]
+    fn account_type_texts_are_distinct() {
+        let texts: std::collections::BTreeSet<_> = AccountType::ALL
+            .into_iter()
+            .map(account_type_text)
+            .collect();
+        assert_eq!(texts.len(), AccountType::ALL.len());
+    }
+
+    #[sqlx::test]
+    async fn every_account_type_text_satisfies_the_sql_check(pool: sqlx::PgPool) {
+        for (number, account_type) in (1_i64..).zip(AccountType::ALL) {
+            sqlx::query(
+                "INSERT INTO recorded_accounts (number, account_type, contra) VALUES ($1, $2, false)",
+            )
+            .bind(number)
+            .bind(account_type_text(account_type))
+            .execute(&pool)
+            .await
+            .unwrap();
         }
     }
 

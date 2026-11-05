@@ -7,7 +7,7 @@ CREATE TABLE recorded_accounts (
     account_type text    NOT NULL,
     contra       boolean NOT NULL,
     CONSTRAINT recorded_accounts_pkey PRIMARY KEY (number),
-    CONSTRAINT recorded_accounts_number_range CHECK (number BETWEEN 0 AND 4294967295),
+    CONSTRAINT recorded_accounts_number_range CHECK (number BETWEEN 0 AND 4294967295), -- u32 range, matching AccountNumber
     CONSTRAINT recorded_accounts_type_valid
         CHECK (account_type IN ('asset', 'liability', 'equity', 'revenue', 'expense'))
 );
@@ -17,5 +17,6 @@ CREATE TRIGGER ledger_append_only_rows BEFORE UPDATE OR DELETE ON recorded_accou
 CREATE TRIGGER ledger_append_only_truncate BEFORE TRUNCATE ON recorded_accounts
     FOR EACH STATEMENT EXECUTE FUNCTION refuse_ledger_edit();
 
+-- Entries may only use accounts the ledger has recorded.
 ALTER TABLE entries ADD CONSTRAINT entries_account_fkey
     FOREIGN KEY (account) REFERENCES recorded_accounts (number);

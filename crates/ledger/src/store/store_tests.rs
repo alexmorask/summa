@@ -9,7 +9,7 @@ use sqlx::PgPool;
 
 use super::save::{Attempt, accounts_to_record};
 use super::{CorruptData, LoadError, SaveError, Saved, Store, StoredTag};
-use crate::account::{Account, AccountType, Side};
+use crate::account::{Account, AccountKind, AccountType, Side};
 use crate::chart::Chart;
 use crate::clock::FixedClock;
 use crate::money::Usd;
@@ -472,10 +472,8 @@ fn unavailable_is_the_only_retryable_error() {
     assert!(std::error::Error::source(&already_reversed).is_none());
     let account_changed = SaveError::AccountChanged {
         account: ASSET,
-        recorded_type: AccountType::Asset,
-        recorded_contra: false,
-        chart_type: AccountType::Liability,
-        chart_contra: false,
+        recorded: AccountKind::new(AccountType::Asset, false),
+        chart: AccountKind::new(AccountType::Liability, false),
     };
     assert!(!account_changed.is_retryable());
     assert!(std::error::Error::source(&account_changed).is_none());
@@ -925,7 +923,87 @@ async fn failure_partway_through_leaves_nothing(pool: PgPool) {
     assert_eq!(row_count(&pool).await, 1);
 }
 
-/// The standard chart with the account `number` replaced by `replacement`.
+#[sqlx::test]
+async fn missing_recorded_row_is_corrupt_not_retryable(pool: PgPool) {
+    sqlx::query(
+        "CREATE FUNCTION skip_account_one() RETURNS trigger AS $$ \
+         BEGIN \
+           IF NEW.number = 1 THEN RETURN NULL; END IF; \
+           RETURN NEW; \
+         END $$ LANGUAGE plpgsql",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER skip_account_one BEFORE INSERT ON recorded_accounts \
+         FOR EACH ROW EXECUTE FUNCTION skip_account_one()",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let error = store(&pool).save(&base()).await.unwrap_err();
+    assert!(!error.is_retryable(), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            SaveError::Corrupt(CorruptData::MissingRecordedAccount { account: 1 })
+        ),
+        "{error:?}"
+    );
+    assert_eq!(row_count(&pool).await, 0);
+}
+
+#[sqlx::test]
+async fn unknown_recorded_account_type_is_corrupt(pool: PgPool) {
+    sqlx::query("ALTER TABLE recorded_accounts DROP CONSTRAINT recorded_accounts_type_valid")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO recorded_accounts (number, account_type, contra) VALUES (1, 'cash', false)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let error = store(&pool).save(&base()).await.unwrap_err();
+    assert!(!error.is_retryable(), "{error:?}");
+    match error {
+        SaveError::Corrupt(CorruptData::UnknownAccountType { account, value }) => {
+            assert_eq!(account, 1);
+            assert_eq!(value, "cash");
+        }
+        other => panic!("expected UnknownAccountType, got {other:?}"),
+    }
+}
+
+#[sqlx::test]
+async fn concurrent_first_uses_with_the_same_type_both_record(pool: PgPool) {
+    let other = build("other", "Other", effective(), &base_entries());
+    let (_, b) = race_between(
+        &pool,
+        store(&pool),
+        &base(),
+        store(&pool),
+        other,
+        async |a| a.commit().await.unwrap(),
+    )
+    .await;
+    match b {
+        Ok(Saved::Recorded(_)) => {}
+        other => panic!("expected Recorded, got {other:?}"),
+    }
+    assert_eq!(row_count(&pool).await, 2);
+    let numbers = sqlx::query_scalar!("SELECT number FROM recorded_accounts ORDER BY number")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(numbers, vec![1, 3]);
+}
+
+/// The standard chart with the account sharing `replacement`'s number swapped for `replacement`.
 fn chart_with(replacement: Account) -> Chart {
     Chart::new(
         chart()
@@ -993,11 +1071,10 @@ async fn changed_account_type_is_rejected(pool: PgPool) {
                 error,
                 SaveError::AccountChanged {
                     account: ASSET,
-                    recorded_type: AccountType::Asset,
-                    recorded_contra: false,
-                    chart_type: AccountType::Liability,
-                    chart_contra: false,
-                }
+                    recorded,
+                    chart,
+                } if recorded == AccountKind::new(AccountType::Asset, false)
+                    && chart == AccountKind::new(AccountType::Liability, false)
             ));
         }
         other => panic!("expected AccountChanged, got {other:?}"),
@@ -1014,16 +1091,12 @@ async fn changed_contra_flag_is_rejected(pool: PgPool) {
     match result {
         Err(SaveError::AccountChanged {
             account,
-            recorded_type,
-            recorded_contra,
-            chart_type,
-            chart_contra,
+            recorded,
+            chart,
         }) => {
             assert_eq!(account, REVENUE);
-            assert_eq!(recorded_type, AccountType::Revenue);
-            assert!(!recorded_contra);
-            assert_eq!(chart_type, AccountType::Revenue);
-            assert!(chart_contra);
+            assert_eq!(recorded, AccountKind::new(AccountType::Revenue, false));
+            assert_eq!(chart, AccountKind::new(AccountType::Revenue, true));
         }
         other => panic!("expected AccountChanged, got {other:?}"),
     }
@@ -1085,13 +1158,12 @@ async fn concurrent_first_uses_with_different_types_record_one(pool: PgPool) {
     match b {
         Err(SaveError::AccountChanged {
             account,
-            recorded_type,
-            chart_type,
-            ..
+            recorded,
+            chart,
         }) => {
             assert_eq!(account, ASSET);
-            assert_eq!(recorded_type, AccountType::Asset);
-            assert_eq!(chart_type, AccountType::Liability);
+            assert_eq!(recorded.account_type(), AccountType::Asset);
+            assert_eq!(chart.account_type(), AccountType::Liability);
         }
         other => panic!("expected AccountChanged, got {other:?}"),
     }

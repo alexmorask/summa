@@ -6,7 +6,7 @@ use std::fmt;
 use chrono::{DateTime, Utc};
 
 use super::rows::{CorruptData, account_type_text};
-use crate::account::{AccountNumber, AccountType};
+use crate::account::{AccountKind, AccountNumber};
 use crate::idempotency::IdempotencyKey;
 use crate::money::Usd;
 use crate::reversal::ReversalError;
@@ -40,10 +40,8 @@ pub enum SaveError {
     /// can't change once an account has entries. Nothing was saved.
     AccountChanged {
         account: AccountNumber,
-        recorded_type: AccountType,
-        recorded_contra: bool,
-        chart_type: AccountType,
-        chart_contra: bool,
+        recorded: AccountKind,
+        chart: AccountKind,
     },
     /// The transaction isn't a valid reversal of the one it names.
     Reversal(ReversalError<Usd>),
@@ -65,9 +63,9 @@ pub(crate) fn violates(error: &sqlx::Error, constraint: &str) -> bool {
 }
 
 /// `liability`, or `contra-revenue` for a contra account.
-fn kind_text(account_type: AccountType, contra: bool) -> String {
-    let text = account_type_text(account_type);
-    if contra {
+fn kind_text(kind: AccountKind) -> String {
+    let text = account_type_text(kind.account_type());
+    if kind.is_contra() {
         format!("contra-{text}")
     } else {
         text.to_owned()
@@ -128,16 +126,14 @@ impl fmt::Display for SaveError {
             }
             SaveError::AccountChanged {
                 account,
-                recorded_type,
-                recorded_contra,
-                chart_type,
-                chart_contra,
+                recorded,
+                chart,
             } => write!(
                 f,
                 "account {} is recorded as {}, but the chart says {}; an account's type and contra flag can't change once it has entries",
                 account.get(),
-                kind_text(*recorded_type, *recorded_contra),
-                kind_text(*chart_type, *chart_contra)
+                kind_text(*recorded),
+                kind_text(*chart)
             ),
             SaveError::Reversal(error) => write!(f, "invalid reversal: {error}"),
             SaveError::Unavailable(error) => write!(f, "database unavailable: {error}"),

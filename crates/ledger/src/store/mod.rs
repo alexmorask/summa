@@ -1,5 +1,6 @@
 //! Storage of the ledger in PostgreSQL.
 
+mod confirmed;
 mod error;
 mod load;
 mod rows;
@@ -10,16 +11,16 @@ mod schema_tests;
 mod store_tests;
 mod stored_tag;
 
-use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use sqlx::PgPool;
 
-use crate::account::AccountNumber;
 use crate::chart::Chart;
 use crate::clock::Clock;
 use crate::money::Usd;
 use crate::transaction::PostedTransaction;
+
+use confirmed::ConfirmedAccounts;
 
 pub use error::{LoadError, SaveError};
 pub use rows::CorruptData;
@@ -31,10 +32,8 @@ pub struct Store<T: StoredTag> {
     pool: PgPool,
     chart: Chart,
     clock: Arc<dyn Clock>,
-    /// Accounts this store has seen committed with the chart's type and
-    /// contra flag, so later saves skip checking them. Only a hint: the
-    /// database is the authority.
-    confirmed: Mutex<HashSet<AccountNumber>>,
+    /// See [`ConfirmedAccounts`].
+    confirmed: ConfirmedAccounts,
     // `T` appears only in method signatures; this ties it to the type.
     tags: std::marker::PhantomData<fn() -> T>,
 }
@@ -47,7 +46,7 @@ impl<T: StoredTag> Store<T> {
             pool,
             chart,
             clock,
-            confirmed: Mutex::new(HashSet::new()),
+            confirmed: ConfirmedAccounts::new(),
             tags: std::marker::PhantomData,
         }
     }

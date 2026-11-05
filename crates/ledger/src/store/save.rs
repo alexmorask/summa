@@ -1,7 +1,6 @@
 //! Saving a transaction: all of it, or none of it.
 
 use std::collections::BTreeSet;
-use std::sync::PoisonError;
 
 use chrono::SubsecRound;
 use sqlx::{Postgres, Transaction};
@@ -10,10 +9,10 @@ use super::error::{SaveError, violates};
 use super::load::load_by_key;
 use super::rows::{CorruptData, CurrencyCode, account_type_text, parse_account_type};
 use super::{Saved, Store, StoredTag};
-use crate::account::{AccountNumber, Side};
+use crate::account::{AccountKind, AccountNumber, Side};
 use crate::idempotency::same_contents;
 use crate::money::Usd;
-use crate::transaction::{PostedTransaction, TransactionId, UnpostedTransaction};
+use crate::transaction::{PostError, PostedTransaction, TransactionId, UnpostedTransaction};
 
 /// What one attempt to insert a transaction came to.
 pub(crate) enum Attempt<T: StoredTag> {
@@ -24,8 +23,9 @@ pub(crate) enum Attempt<T: StoredTag> {
     KeyTaken,
 }
 
-/// The distinct accounts `posted` has entries on, in ascending order. Every
-/// save locks them in the same order.
+/// The distinct accounts `posted` has entries on, ascending. Inserting in
+/// this order means two concurrent saves wait on each other's rows instead of
+/// deadlocking. It also lists the accounts to mark confirmed after commit.
 pub(crate) fn accounts_to_record<T: StoredTag>(
     posted: &PostedTransaction<Usd, T>,
 ) -> Vec<AccountNumber> {
@@ -55,7 +55,8 @@ impl<T: StoredTag> Store<T> {
     /// nothing new and returns [`Saved::AlreadyRecorded`] with the original.
     /// Reusing a key for different contents is [`SaveError::Conflict`].
     /// Reversing a transaction that already has a reversal is
-    /// [`SaveError::AlreadyReversed`].
+    /// [`SaveError::AlreadyReversed`]. A chart that changes a used account's
+    /// type or contra flag is [`SaveError::AccountChanged`].
     ///
     /// IDs come from a database sequence, so a failed or conflicting save can
     /// leave a gap in the IDs. That is expected.
@@ -148,10 +149,7 @@ impl<T: StoredTag> Store<T> {
             Attempt::Inserted(ref posted) => {
                 tx.commit().await.map_err(SaveError::from_database)?;
                 // Only now are the accounts surely recorded.
-                self.confirmed
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .extend(accounts_to_record(posted));
+                self.confirmed.mark_committed(&accounts_to_record(posted));
             }
             // Release the connection before the caller looks the key up.
             Attempt::KeyTaken => tx.rollback().await.map_err(SaveError::from_database)?,
@@ -221,6 +219,9 @@ impl<T: StoredTag> Store<T> {
             return Ok(Attempt::KeyTaken);
         }
 
+        // After the key insert on purpose: a retry of an already-recorded
+        // request returned above, so it is never checked against today's
+        // chart. Only new facts are checked.
         self.record_accounts(tx, &posted).await?;
 
         for (index, entry) in posted.entries().iter().enumerate() {
@@ -275,29 +276,32 @@ impl<T: StoredTag> Store<T> {
         tx: &mut Transaction<'_, Postgres>,
         posted: &PostedTransaction<Usd, T>,
     ) -> Result<(), SaveError> {
-        let pending: Vec<AccountNumber> = {
-            let confirmed = self
-                .confirmed
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            accounts_to_record(posted)
-                .into_iter()
-                .filter(|account| !confirmed.contains(account))
-                .collect()
-        };
+        let pending = self.confirmed.unconfirmed(&accounts_to_record(posted));
         if pending.is_empty() {
             return Ok(());
         }
 
+        // Ascending order (see `accounts_to_record`); the UNNEST insert below
+        // preserves array order, so concurrent saves lock rows in the same order.
+        let mut accounts = Vec::with_capacity(pending.len());
         let mut numbers = Vec::with_capacity(pending.len());
         let mut types = Vec::with_capacity(pending.len());
         let mut contras = Vec::with_capacity(pending.len());
         for number in &pending {
-            // `post` has already confirmed every account is in the chart.
-            let account = self
-                .chart
-                .get(*number)
-                .ok_or(SaveError::Unavailable(sqlx::Error::RowNotFound))?;
+            // `post` has already confirmed every account is in the chart, so
+            // this is unreachable; it is still a rejection, never a retry.
+            let account = self.chart.get(*number).ok_or_else(|| {
+                let entry = posted
+                    .entries()
+                    .iter()
+                    .position(|entry| entry.account() == *number)
+                    .unwrap_or(0);
+                SaveError::Rejected(PostError::UnknownAccount {
+                    entry,
+                    account: *number,
+                })
+            })?;
+            accounts.push(account);
             numbers.push(i64::from(number.get()));
             types.push(account_type_text(account.account_type()));
             contras.push(account.is_contra());
@@ -315,8 +319,9 @@ impl<T: StoredTag> Store<T> {
         .await
         .map_err(SaveError::from_database)?;
 
-        // A separate statement: under Read Committed only a new statement sees
-        // a row a concurrent first use committed while the insert waited on it.
+        // A separate statement: under Read Committed a statement only sees rows
+        // committed before it started, so only a new SELECT sees a concurrent
+        // first use that committed while the INSERT waited.
         let rows = sqlx::query!(
             "SELECT number, account_type, contra FROM recorded_accounts WHERE number = ANY($1)",
             &numbers
@@ -325,29 +330,26 @@ impl<T: StoredTag> Store<T> {
         .await
         .map_err(SaveError::from_database)?;
 
-        for number in &pending {
+        for (number, account) in pending.iter().zip(&accounts) {
             let raw = i64::from(number.get());
             let row = rows
                 .iter()
                 .find(|row| row.number == raw)
-                .ok_or(SaveError::Unavailable(sqlx::Error::RowNotFound))?;
+                .ok_or(SaveError::Corrupt(CorruptData::MissingRecordedAccount {
+                    account: raw,
+                }))?;
             let recorded_type = parse_account_type(&row.account_type).ok_or_else(|| {
                 SaveError::Corrupt(CorruptData::UnknownAccountType {
                     account: raw,
                     value: row.account_type.clone(),
                 })
             })?;
-            let account = self
-                .chart
-                .get(*number)
-                .ok_or(SaveError::Unavailable(sqlx::Error::RowNotFound))?;
-            if recorded_type != account.account_type() || row.contra != account.is_contra() {
+            let recorded = AccountKind::new(recorded_type, row.contra);
+            if recorded != account.kind() {
                 return Err(SaveError::AccountChanged {
                     account: *number,
-                    recorded_type,
-                    recorded_contra: row.contra,
-                    chart_type: account.account_type(),
-                    chart_contra: account.is_contra(),
+                    recorded,
+                    chart: account.kind(),
                 });
             }
         }
