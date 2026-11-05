@@ -8,7 +8,7 @@ use std::fmt;
 use chrono::{DateTime, Utc};
 
 use super::stored_tag::StoredTag;
-use crate::account::{AccountNumber, Side};
+use crate::account::{AccountNumber, AccountType, Side};
 use crate::idempotency::IdempotencyKey;
 use crate::money::{Money, Usd};
 use crate::transaction::{Entry, PostedTransaction, TransactionId};
@@ -66,6 +66,29 @@ impl CurrencyCode {
     }
 }
 
+/// The text `recorded_accounts.account_type` holds for `account_type`.
+pub(crate) const fn account_type_text(account_type: AccountType) -> &'static str {
+    match account_type {
+        AccountType::Asset => "asset",
+        AccountType::Liability => "liability",
+        AccountType::Equity => "equity",
+        AccountType::Revenue => "revenue",
+        AccountType::Expense => "expense",
+    }
+}
+
+/// The account type a stored text names, if it names one.
+pub(crate) fn parse_account_type(text: &str) -> Option<AccountType> {
+    match text {
+        "asset" => Some(AccountType::Asset),
+        "liability" => Some(AccountType::Liability),
+        "equity" => Some(AccountType::Equity),
+        "revenue" => Some(AccountType::Revenue),
+        "expense" => Some(AccountType::Expense),
+        _ => None,
+    }
+}
+
 /// Why stored rows couldn't become a transaction. The database's constraints
 /// should make each of these impossible, so any of them means the data was
 /// changed behind the ledger's back. Every message names the transaction.
@@ -89,6 +112,8 @@ pub enum CorruptData {
         column: &'static str,
         value: i64,
     },
+    /// A recorded account's type isn't one the ledger knows.
+    UnknownAccountType { account: i64, value: String },
     /// The stored idempotency key isn't a valid key.
     InvalidIdempotencyKey { transaction: i64, key: String },
     /// Two entry rows share a position.
@@ -127,6 +152,10 @@ impl fmt::Display for CorruptData {
             } => write!(
                 f,
                 "corrupt data in transaction {transaction}: {column} {value} is out of range"
+            ),
+            CorruptData::UnknownAccountType { account, value } => write!(
+                f,
+                "corrupt data in recorded account {account}: unknown type {value:?}"
             ),
             CorruptData::InvalidIdempotencyKey { transaction, key } => write!(
                 f,

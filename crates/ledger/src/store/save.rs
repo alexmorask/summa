@@ -1,13 +1,16 @@
 //! Saving a transaction: all of it, or none of it.
 
+use std::collections::BTreeSet;
+use std::sync::PoisonError;
+
 use chrono::SubsecRound;
 use sqlx::{Postgres, Transaction};
 
 use super::error::{SaveError, violates};
 use super::load::load_by_key;
-use super::rows::{CorruptData, CurrencyCode};
+use super::rows::{CorruptData, CurrencyCode, account_type_text, parse_account_type};
 use super::{Saved, Store, StoredTag};
-use crate::account::Side;
+use crate::account::{AccountNumber, Side};
 use crate::idempotency::same_contents;
 use crate::money::Usd;
 use crate::transaction::{PostedTransaction, TransactionId, UnpostedTransaction};
@@ -19,6 +22,20 @@ pub(crate) enum Attempt<T: StoredTag> {
     Inserted(PostedTransaction<Usd, T>),
     /// Another transaction already owns the idempotency key. Nothing was written.
     KeyTaken,
+}
+
+/// The distinct accounts `posted` has entries on, in ascending order. Every
+/// save locks them in the same order.
+pub(crate) fn accounts_to_record<T: StoredTag>(
+    posted: &PostedTransaction<Usd, T>,
+) -> Vec<AccountNumber> {
+    posted
+        .entries()
+        .iter()
+        .map(|entry| entry.account())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 /// 4713-01-01 BC: PostgreSQL's lower timestamptz bound, as a year-numbered date.
@@ -128,7 +145,14 @@ impl<T: StoredTag> Store<T> {
         let mut tx = self.pool.begin().await.map_err(SaveError::from_database)?;
         let attempt = self.insert_on(&mut tx, transaction, recorded_at).await?;
         match attempt {
-            Attempt::Inserted(_) => tx.commit().await.map_err(SaveError::from_database)?,
+            Attempt::Inserted(ref posted) => {
+                tx.commit().await.map_err(SaveError::from_database)?;
+                // Only now are the accounts surely recorded.
+                self.confirmed
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .extend(accounts_to_record(posted));
+            }
             // Release the connection before the caller looks the key up.
             Attempt::KeyTaken => tx.rollback().await.map_err(SaveError::from_database)?,
         }
@@ -197,6 +221,8 @@ impl<T: StoredTag> Store<T> {
             return Ok(Attempt::KeyTaken);
         }
 
+        self.record_accounts(tx, &posted).await?;
+
         for (index, entry) in posted.entries().iter().enumerate() {
             let position = i16::try_from(index).map_err(|_| {
                 SaveError::Corrupt(CorruptData::OutOfRange {
@@ -239,5 +265,92 @@ impl<T: StoredTag> Store<T> {
         }
 
         Ok(Attempt::Inserted(posted))
+    }
+
+    /// Records the type and contra flag of each account `posted` uses that
+    /// this store hasn't confirmed, and checks them against the chart. The
+    /// first entry on an account fixes both for good.
+    async fn record_accounts(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        posted: &PostedTransaction<Usd, T>,
+    ) -> Result<(), SaveError> {
+        let pending: Vec<AccountNumber> = {
+            let confirmed = self
+                .confirmed
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            accounts_to_record(posted)
+                .into_iter()
+                .filter(|account| !confirmed.contains(account))
+                .collect()
+        };
+        if pending.is_empty() {
+            return Ok(());
+        }
+
+        let mut numbers = Vec::with_capacity(pending.len());
+        let mut types = Vec::with_capacity(pending.len());
+        let mut contras = Vec::with_capacity(pending.len());
+        for number in &pending {
+            // `post` has already confirmed every account is in the chart.
+            let account = self
+                .chart
+                .get(*number)
+                .ok_or(SaveError::Unavailable(sqlx::Error::RowNotFound))?;
+            numbers.push(i64::from(number.get()));
+            types.push(account_type_text(account.account_type()));
+            contras.push(account.is_contra());
+        }
+
+        sqlx::query!(
+            "INSERT INTO recorded_accounts (number, account_type, contra) \
+             SELECT * FROM UNNEST($1::bigint[], $2::text[], $3::bool[]) \
+             ON CONFLICT (number) DO NOTHING",
+            &numbers,
+            &types as &[&str],
+            &contras
+        )
+        .execute(&mut **tx)
+        .await
+        .map_err(SaveError::from_database)?;
+
+        // A separate statement: under Read Committed only a new statement sees
+        // a row a concurrent first use committed while the insert waited on it.
+        let rows = sqlx::query!(
+            "SELECT number, account_type, contra FROM recorded_accounts WHERE number = ANY($1)",
+            &numbers
+        )
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(SaveError::from_database)?;
+
+        for number in &pending {
+            let raw = i64::from(number.get());
+            let row = rows
+                .iter()
+                .find(|row| row.number == raw)
+                .ok_or(SaveError::Unavailable(sqlx::Error::RowNotFound))?;
+            let recorded_type = parse_account_type(&row.account_type).ok_or_else(|| {
+                SaveError::Corrupt(CorruptData::UnknownAccountType {
+                    account: raw,
+                    value: row.account_type.clone(),
+                })
+            })?;
+            let account = self
+                .chart
+                .get(*number)
+                .ok_or(SaveError::Unavailable(sqlx::Error::RowNotFound))?;
+            if recorded_type != account.account_type() || row.contra != account.is_contra() {
+                return Err(SaveError::AccountChanged {
+                    account: *number,
+                    recorded_type,
+                    recorded_contra: row.contra,
+                    chart_type: account.account_type(),
+                    chart_contra: account.is_contra(),
+                });
+            }
+        }
+        Ok(())
     }
 }

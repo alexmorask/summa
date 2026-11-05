@@ -7,7 +7,7 @@ use proptest::strategy::{Strategy, ValueTree};
 use proptest::test_runner::TestRunner;
 use sqlx::PgPool;
 
-use super::save::Attempt;
+use super::save::{Attempt, accounts_to_record};
 use super::{CorruptData, LoadError, SaveError, Saved, Store, StoredTag};
 use crate::account::{Account, AccountType, Side};
 use crate::chart::Chart;
@@ -16,7 +16,8 @@ use crate::money::Usd;
 use crate::reversal::ReversalError;
 use crate::tag::Tag;
 use crate::test_support::{
-    ASSET, LIABILITY, NOT_IN_CHART, REVENUE, TestEntry, TestTag, chart, key, usd, valid_entries,
+    ASSET, CONTRA_REVENUE, LIABILITY, NOT_IN_CHART, REVENUE, TestEntry, TestTag, chart, key, usd,
+    valid_entries,
 };
 use crate::transaction::{PostError, TransactionId, UnpostedTransaction};
 
@@ -469,6 +470,19 @@ fn unavailable_is_the_only_retryable_error() {
     };
     assert!(!already_reversed.is_retryable());
     assert!(std::error::Error::source(&already_reversed).is_none());
+    let account_changed = SaveError::AccountChanged {
+        account: ASSET,
+        recorded_type: AccountType::Asset,
+        recorded_contra: false,
+        chart_type: AccountType::Liability,
+        chart_contra: false,
+    };
+    assert!(!account_changed.is_retryable());
+    assert!(std::error::Error::source(&account_changed).is_none());
+    assert_eq!(
+        account_changed.to_string(),
+        "account 1 is recorded as asset, but the chart says liability; an account's type and contra flag can't change once it has entries"
+    );
 }
 
 #[sqlx::test]
@@ -641,6 +655,13 @@ async fn corrupt_stored_row_is_reported(pool: PgPool) {
     // A balanced transaction whose tag kind the tag type doesn't know. The
     // deferred balance check passes, so the database accepts it.
     let mut db = pool.begin().await.unwrap();
+    sqlx::query(
+        "INSERT INTO recorded_accounts (number, account_type, contra) \
+         VALUES (1, 'asset', false), (3, 'revenue', false)",
+    )
+    .execute(&mut *db)
+    .await
+    .unwrap();
     let id: i64 = sqlx::query_scalar("SELECT nextval('transaction_ids')")
         .fetch_one(&mut *db)
         .await
@@ -766,6 +787,13 @@ async fn entry_count(pool: &PgPool) -> i64 {
         .unwrap()
 }
 
+async fn recorded_account_count(pool: &PgPool) -> i64 {
+    sqlx::query_scalar!(r#"SELECT count(*) AS "n!" FROM recorded_accounts"#)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
 async fn tag_count(pool: &PgPool) -> i64 {
     sqlx::query_scalar!(r#"SELECT count(*) AS "n!" FROM entry_tags"#)
         .fetch_one(pool)
@@ -885,6 +913,7 @@ async fn failure_partway_through_leaves_nothing(pool: PgPool) {
     assert_eq!(row_count(&pool).await, 0, "transactions");
     assert_eq!(entry_count(&pool).await, 0, "entries");
     assert_eq!(tag_count(&pool).await, 0, "entry_tags");
+    assert_eq!(recorded_account_count(&pool).await, 0, "recorded_accounts");
 
     // Nothing is left over: with the fault removed, a different transaction saves.
     sqlx::query("DROP TRIGGER fail_on_second_entry ON entries")
@@ -894,4 +923,251 @@ async fn failure_partway_through_leaves_nothing(pool: PgPool) {
     let other = build("works", "Works", effective(), &base_entries());
     assert!(matches!(store.save(&other).await, Ok(Saved::Recorded(_))));
     assert_eq!(row_count(&pool).await, 1);
+}
+
+/// The standard chart with the account `number` replaced by `replacement`.
+fn chart_with(replacement: Account) -> Chart {
+    Chart::new(
+        chart()
+            .accounts()
+            .map(|account| {
+                if account.number() == replacement.number() {
+                    replacement.clone()
+                } else {
+                    account.clone()
+                }
+            })
+            .collect::<Vec<_>>(),
+    )
+    .unwrap()
+}
+
+/// A chart where `ASSET` is a liability.
+fn asset_as_liability() -> Chart {
+    chart_with(Account::new(ASSET, "Asset", AccountType::Liability))
+}
+
+/// Debit `ASSET`, credit `REVENUE`, 100 cents, built against `chart`.
+fn uses_asset(chart: &Chart, key_text: &str) -> UnpostedTransaction<Usd, TestTag> {
+    build_in(
+        chart,
+        key_text,
+        "Uses asset",
+        effective(),
+        &[
+            (ASSET, Side::Debit, 100, vec![]),
+            (REVENUE, Side::Credit, 100, vec![]),
+        ],
+    )
+}
+
+async fn recorded_accounts(pool: &PgPool) -> Vec<(i64, String, bool)> {
+    sqlx::query_as("SELECT number, account_type, contra FROM recorded_accounts ORDER BY number")
+        .fetch_all(pool)
+        .await
+        .unwrap()
+}
+
+#[sqlx::test]
+async fn first_save_records_its_accounts(pool: PgPool) {
+    store(&pool).save(&base()).await.unwrap();
+    assert_eq!(
+        recorded_accounts(&pool).await,
+        vec![
+            (1, "asset".to_owned(), false),
+            (3, "revenue".to_owned(), false)
+        ]
+    );
+}
+
+#[sqlx::test]
+async fn changed_account_type_is_rejected(pool: PgPool) {
+    store(&pool).save(&base()).await.unwrap();
+    let changed = asset_as_liability();
+    let later = uses_asset(&changed, "later");
+    let result = store_at(&pool, changed, clock_time()).save(&later).await;
+    match result {
+        Err(error @ SaveError::AccountChanged { .. }) => {
+            assert!(!error.is_retryable());
+            assert!(matches!(
+                error,
+                SaveError::AccountChanged {
+                    account: ASSET,
+                    recorded_type: AccountType::Asset,
+                    recorded_contra: false,
+                    chart_type: AccountType::Liability,
+                    chart_contra: false,
+                }
+            ));
+        }
+        other => panic!("expected AccountChanged, got {other:?}"),
+    }
+    assert_eq!(row_count(&pool).await, 1);
+}
+
+#[sqlx::test]
+async fn changed_contra_flag_is_rejected(pool: PgPool) {
+    store(&pool).save(&base()).await.unwrap();
+    let changed = chart_with(Account::contra(REVENUE, "Revenue", AccountType::Revenue));
+    let later = uses_asset(&changed, "later");
+    let result = store_at(&pool, changed, clock_time()).save(&later).await;
+    match result {
+        Err(SaveError::AccountChanged {
+            account,
+            recorded_type,
+            recorded_contra,
+            chart_type,
+            chart_contra,
+        }) => {
+            assert_eq!(account, REVENUE);
+            assert_eq!(recorded_type, AccountType::Revenue);
+            assert!(!recorded_contra);
+            assert_eq!(chart_type, AccountType::Revenue);
+            assert!(chart_contra);
+        }
+        other => panic!("expected AccountChanged, got {other:?}"),
+    }
+    assert_eq!(row_count(&pool).await, 1);
+}
+
+#[sqlx::test]
+async fn renamed_account_saves(pool: PgPool) {
+    store(&pool).save(&base()).await.unwrap();
+    let renamed = chart_with(Account::new(ASSET, "Cash", AccountType::Asset));
+    let later = uses_asset(&renamed, "later");
+    let result = store_at(&pool, renamed, clock_time()).save(&later).await;
+    assert!(matches!(result, Ok(Saved::Recorded(_))), "{result:?}");
+}
+
+#[sqlx::test]
+async fn unused_account_can_still_change_type(pool: PgPool) {
+    store(&pool).save(&base()).await.unwrap();
+    let changed = chart_with(Account::new(LIABILITY, "Liability", AccountType::Equity));
+    let later = build_in(
+        &changed,
+        "later",
+        "Uses liability",
+        effective(),
+        &[
+            (ASSET, Side::Debit, 100, vec![]),
+            (LIABILITY, Side::Credit, 100, vec![]),
+        ],
+    );
+    let result = store_at(&pool, changed, clock_time()).save(&later).await;
+    assert!(matches!(result, Ok(Saved::Recorded(_))), "{result:?}");
+}
+
+#[sqlx::test]
+async fn retry_from_a_changed_chart_is_already_recorded(pool: PgPool) {
+    store(&pool).save(&base()).await.unwrap();
+    let result = store_at(&pool, asset_as_liability(), clock_time())
+        .save(&base())
+        .await;
+    assert!(
+        matches!(result, Ok(Saved::AlreadyRecorded(_))),
+        "{result:?}"
+    );
+}
+
+#[sqlx::test]
+async fn concurrent_first_uses_with_different_types_record_one(pool: PgPool) {
+    let changed = asset_as_liability();
+    let other = uses_asset(&changed, "other");
+    let (_, b) = race_between(
+        &pool,
+        store(&pool),
+        &base(),
+        store_at(&pool, changed, clock_time()),
+        other,
+        async |a| a.commit().await.unwrap(),
+    )
+    .await;
+    match b {
+        Err(SaveError::AccountChanged {
+            account,
+            recorded_type,
+            chart_type,
+            ..
+        }) => {
+            assert_eq!(account, ASSET);
+            assert_eq!(recorded_type, AccountType::Asset);
+            assert_eq!(chart_type, AccountType::Liability);
+        }
+        other => panic!("expected AccountChanged, got {other:?}"),
+    }
+    assert_eq!(row_count(&pool).await, 1);
+}
+
+#[sqlx::test]
+async fn concurrent_first_use_after_rollback_records_the_second(pool: PgPool) {
+    let changed = asset_as_liability();
+    let other = uses_asset(&changed, "other");
+    let (_, b) = race_between(
+        &pool,
+        store(&pool),
+        &base(),
+        store_at(&pool, changed, clock_time()),
+        other,
+        async |a| a.rollback().await.unwrap(),
+    )
+    .await;
+    assert!(matches!(b, Ok(Saved::Recorded(_))), "{b:?}");
+    assert_eq!(
+        recorded_accounts(&pool).await.first(),
+        Some(&(1, "liability".to_owned(), false))
+    );
+}
+
+#[sqlx::test]
+async fn transaction_using_one_account_twice_saves(pool: PgPool) {
+    let twice = build(
+        "twice",
+        "Twice",
+        effective(),
+        &[
+            (ASSET, Side::Debit, 100, vec![]),
+            (ASSET, Side::Debit, 50, vec![]),
+            (REVENUE, Side::Credit, 150, vec![]),
+        ],
+    );
+    let result = store(&pool).save(&twice).await;
+    assert!(matches!(result, Ok(Saved::Recorded(_))), "{result:?}");
+    assert_eq!(recorded_accounts(&pool).await.len(), 2);
+}
+
+#[sqlx::test]
+async fn contra_account_saves_twice(pool: PgPool) {
+    let store = store(&pool);
+    for key_text in ["contra-1", "contra-2"] {
+        let contra = build(
+            key_text,
+            "Contra",
+            effective(),
+            &[
+                (CONTRA_REVENUE, Side::Debit, 100, vec![]),
+                (ASSET, Side::Credit, 100, vec![]),
+            ],
+        );
+        let result = store.save(&contra).await;
+        assert!(matches!(result, Ok(Saved::Recorded(_))), "{result:?}");
+    }
+    let recorded = recorded_accounts(&pool).await;
+    assert!(recorded.contains(&(4, "revenue".to_owned(), true)));
+}
+
+#[test]
+fn accounts_to_record_are_sorted_and_distinct() {
+    let posted = build(
+        "sorted",
+        "Sorted",
+        effective(),
+        &[
+            (REVENUE, Side::Debit, 100, vec![]),
+            (ASSET, Side::Credit, 200, vec![]),
+            (REVENUE, Side::Debit, 100, vec![]),
+        ],
+    )
+    .post(&chart(), TransactionId::new(1), clock_time())
+    .unwrap();
+    assert_eq!(accounts_to_record(&posted), vec![ASSET, REVENUE]);
 }
