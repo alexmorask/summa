@@ -119,6 +119,32 @@ fn violated(result: Result<(), sqlx::Error>) -> String {
 }
 
 #[sqlx::test]
+async fn rejects_second_reversal_of_one_transaction(pool: PgPool) {
+    insert_valid(&pool, 1, "original").await;
+    let mut tx = pool.begin().await.unwrap();
+    insert_transaction(
+        &mut *tx,
+        2,
+        "r1",
+        "2026-01-01T00:00:00Z",
+        "2026-01-02T00:00:00Z",
+        Some(1),
+    )
+    .await
+    .unwrap();
+    let result = insert_transaction(
+        &mut *tx,
+        3,
+        "r2",
+        "2026-01-01T00:00:00Z",
+        "2026-01-02T00:00:00Z",
+        Some(1),
+    )
+    .await;
+    assert_eq!(violated(result), "transactions_reverses_unique");
+}
+
+#[sqlx::test]
 async fn rejects_non_positive_amount(pool: PgPool) {
     insert_valid(&pool, 1, "valid").await;
     let mut tx = pool.begin().await.unwrap();

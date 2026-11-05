@@ -464,6 +464,11 @@ fn unavailable_is_the_only_retryable_error() {
     };
     assert!(!too_precise.is_retryable());
     assert!(std::error::Error::source(&too_precise).is_none());
+    let already_reversed = SaveError::AlreadyReversed {
+        original: TransactionId::new(1),
+    };
+    assert!(!already_reversed.is_retryable());
+    assert!(std::error::Error::source(&already_reversed).is_none());
 }
 
 #[sqlx::test]
@@ -613,14 +618,22 @@ async fn retry_of_a_reversal_is_already_recorded(pool: PgPool) {
 }
 
 #[sqlx::test]
-async fn two_reversals_of_one_transaction_both_save(pool: PgPool) {
-    // "A transaction is reversed at most once" is SUM-10's job (the database
-    // enforces it). Until then both save; SUM-10 flips this test.
+async fn second_reversal_of_a_transaction_is_already_reversed(pool: PgPool) {
     let store = store(&pool);
     let t1 = saved_original(&store).await;
     store.save(&reversal_of(&t1, "reverse-1")).await.unwrap();
-    store.save(&reversal_of(&t1, "reverse-2")).await.unwrap();
-    assert_eq!(row_count(&pool).await, 3);
+    match store.save(&reversal_of(&t1, "reverse-2")).await {
+        Err(error @ SaveError::AlreadyReversed { original }) => {
+            assert_eq!(original, t1.id());
+            assert!(!error.is_retryable());
+            assert_eq!(
+                error.to_string(),
+                format!("transaction {} is already reversed", t1.id().get())
+            );
+        }
+        other => panic!("expected AlreadyReversed, got {other:?}"),
+    }
+    assert_eq!(row_count(&pool).await, 2);
 }
 
 #[sqlx::test]
@@ -707,6 +720,32 @@ async fn wait_for_lock_waiter(pool: &PgPool) {
         .expect("save B never blocked on save A's uncommitted insert");
 }
 
+/// Save A inserts `a` and stays open; save B of `b` runs on its own store and
+/// blocks on it. Returns A's posted transaction and B's result, after `finish`
+/// has committed or rolled back A.
+async fn race_between(
+    pool: &PgPool,
+    store_a: Store<TestTag>,
+    a: &UnpostedTransaction<Usd, TestTag>,
+    store_b: Store<TestTag>,
+    b: UnpostedTransaction<Usd, TestTag>,
+    finish: impl AsyncFnOnce(sqlx::Transaction<'static, sqlx::Postgres>),
+) -> (
+    crate::transaction::PostedTransaction<Usd, TestTag>,
+    Result<Saved<TestTag>, SaveError>,
+) {
+    let mut tx_a = pool.begin().await.unwrap();
+    let Attempt::Inserted(posted_a) = store_a.insert_on(&mut tx_a, a, clock_time()).await.unwrap()
+    else {
+        panic!("save A should have inserted");
+    };
+
+    let b = tokio::spawn(async move { store_b.save(&b).await });
+    wait_for_lock_waiter(pool).await;
+    finish(tx_a).await;
+    (posted_a, b.await.unwrap())
+}
+
 /// Save A inserts `base()` and stays open; save B of the same transaction
 /// blocks on it. Returns A's posted transaction and B's result, after `finish`
 /// has committed or rolled back A.
@@ -717,19 +756,7 @@ async fn race(
     crate::transaction::PostedTransaction<Usd, TestTag>,
     Result<Saved<TestTag>, SaveError>,
 ) {
-    let x = base();
-    let store_a = store(pool);
-    let mut a = pool.begin().await.unwrap();
-    let Attempt::Inserted(posted_a) = store_a.insert_on(&mut a, &x, clock_time()).await.unwrap()
-    else {
-        panic!("save A should have inserted");
-    };
-
-    let store_b = store(pool);
-    let b = tokio::spawn(async move { store_b.save(&x).await });
-    wait_for_lock_waiter(pool).await;
-    finish(a).await;
-    (posted_a, b.await.unwrap())
+    race_between(pool, store(pool), &base(), store(pool), base(), finish).await
 }
 
 async fn entry_count(pool: &PgPool) -> i64 {
@@ -766,6 +793,63 @@ async fn concurrent_save_after_rollback_records_it(pool: PgPool) {
     }
     assert_eq!(row_count(&pool).await, 1);
     assert_eq!(entry_count(&pool).await, 2);
+}
+
+#[sqlx::test]
+async fn concurrent_reversals_of_one_transaction_save_once(pool: PgPool) {
+    let t1 = saved_original(&store(&pool)).await;
+    let (_, b) = race_between(
+        &pool,
+        store(&pool),
+        &reversal_of(&t1, "reverse-1"),
+        store(&pool),
+        reversal_of(&t1, "reverse-2"),
+        async |a| a.commit().await.unwrap(),
+    )
+    .await;
+    match b {
+        Err(SaveError::AlreadyReversed { original }) => assert_eq!(original, t1.id()),
+        other => panic!("expected AlreadyReversed, got {other:?}"),
+    }
+    assert_eq!(row_count(&pool).await, 2);
+}
+
+#[sqlx::test]
+async fn concurrent_reversal_after_rollback_records_it(pool: PgPool) {
+    let t1 = saved_original(&store(&pool)).await;
+    let (_, b) = race_between(
+        &pool,
+        store(&pool),
+        &reversal_of(&t1, "reverse-1"),
+        store(&pool),
+        reversal_of(&t1, "reverse-2"),
+        async |a| a.rollback().await.unwrap(),
+    )
+    .await;
+    match b {
+        Ok(Saved::Recorded(posted)) => assert_eq!(posted.reverses(), Some(t1.id())),
+        other => panic!("expected Recorded, got {other:?}"),
+    }
+    assert_eq!(row_count(&pool).await, 2);
+}
+
+#[sqlx::test]
+async fn concurrent_retry_of_a_reversal_is_already_recorded(pool: PgPool) {
+    let t1 = saved_original(&store(&pool)).await;
+    let (posted_a, b) = race_between(
+        &pool,
+        store(&pool),
+        &reversal_of(&t1, "reverse-1"),
+        store(&pool),
+        reversal_of(&t1, "reverse-1"),
+        async |a| a.commit().await.unwrap(),
+    )
+    .await;
+    match b {
+        Ok(Saved::AlreadyRecorded(existing)) => assert_eq!(existing.id(), posted_a.id()),
+        other => panic!("expected AlreadyRecorded, got {other:?}"),
+    }
+    assert_eq!(row_count(&pool).await, 2);
 }
 
 #[sqlx::test]

@@ -31,6 +31,9 @@ pub enum SaveError {
     Unstorable { what: &'static str },
     /// The transaction reverses one that isn't in the ledger.
     OriginalNotFound { original: TransactionId },
+    /// The transaction it reverses has already been reversed. A transaction is
+    /// reversed at most once. Nothing was saved.
+    AlreadyReversed { original: TransactionId },
     /// The transaction isn't a valid reversal of the one it names.
     Reversal(ReversalError<Usd>),
     /// The database couldn't be reached or failed. The transaction may or may
@@ -39,6 +42,15 @@ pub enum SaveError {
     Unavailable(sqlx::Error),
     /// Stored data couldn't be read back.
     Corrupt(CorruptData),
+}
+
+/// Whether `error` is a database error that violated the constraint named
+/// `constraint`.
+pub(crate) fn violates(error: &sqlx::Error, constraint: &str) -> bool {
+    error
+        .as_database_error()
+        .and_then(|db| db.constraint())
+        .is_some_and(|name| name == constraint)
 }
 
 impl SaveError {
@@ -90,6 +102,9 @@ impl fmt::Display for SaveError {
                 "the transaction it reverses ({}) is not in the ledger",
                 original.get()
             ),
+            SaveError::AlreadyReversed { original } => {
+                write!(f, "transaction {} is already reversed", original.get())
+            }
             SaveError::Reversal(error) => write!(f, "invalid reversal: {error}"),
             SaveError::Unavailable(error) => write!(f, "database unavailable: {error}"),
             SaveError::Corrupt(error) => write!(f, "{error}"),

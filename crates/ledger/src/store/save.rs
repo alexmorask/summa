@@ -3,7 +3,7 @@
 use chrono::SubsecRound;
 use sqlx::{Postgres, Transaction};
 
-use super::error::SaveError;
+use super::error::{SaveError, violates};
 use super::load::load_by_key;
 use super::rows::{CorruptData, CurrencyCode};
 use super::{Saved, Store, StoredTag};
@@ -37,6 +37,8 @@ impl<T: StoredTag> Store<T> {
     /// Saving the same request again (same key, same contents) records
     /// nothing new and returns [`Saved::AlreadyRecorded`] with the original.
     /// Reusing a key for different contents is [`SaveError::Conflict`].
+    /// Reversing a transaction that already has a reversal is
+    /// [`SaveError::AlreadyReversed`].
     ///
     /// IDs come from a database sequence, so a failed or conflicting save can
     /// leave a gap in the IDs. That is expected.
@@ -185,7 +187,12 @@ impl<T: StoredTag> Store<T> {
         )
         .fetch_optional(&mut **tx)
         .await
-        .map_err(SaveError::from_database)?;
+        .map_err(|e| match posted.reverses() {
+            Some(original) if violates(&e, "transactions_reverses_unique") => {
+                SaveError::AlreadyReversed { original }
+            }
+            _ => SaveError::from_database(e),
+        })?;
         if inserted.is_none() {
             return Ok(Attempt::KeyTaken);
         }
