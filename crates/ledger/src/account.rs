@@ -64,7 +64,10 @@ impl AccountNumber {
 ///
 /// Normal side (from the type and contra flag) and permanence (from the type
 /// alone) are derived, never stored, so they can't disagree with them.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+///
+/// An account's identity is its `number()`, and maps key by number. `==`
+/// compares every field.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Account {
     number: AccountNumber,
     name: &'static str,
