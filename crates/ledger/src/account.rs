@@ -29,12 +29,47 @@ pub enum AccountType {
 }
 
 impl AccountType {
+    /// Every account type. Extend it when a variant is added; the round-trip
+    /// tests in the store catch an `ALL` that falls out of step.
+    pub const ALL: [AccountType; 5] = [
+        AccountType::Asset,
+        AccountType::Liability,
+        AccountType::Equity,
+        AccountType::Revenue,
+        AccountType::Expense,
+    ];
+
     /// The side that makes an account of this type grow.
     const fn normal_side(self) -> Side {
         match self {
             AccountType::Asset | AccountType::Expense => Side::Debit,
             AccountType::Liability | AccountType::Equity | AccountType::Revenue => Side::Credit,
         }
+    }
+}
+
+/// An account's type and contra flag: the two facts that give its entries
+/// their meaning, and that can't change once it has entries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AccountKind {
+    account_type: AccountType,
+    contra: bool,
+}
+
+impl AccountKind {
+    pub const fn new(account_type: AccountType, contra: bool) -> Self {
+        Self {
+            account_type,
+            contra,
+        }
+    }
+
+    pub const fn account_type(self) -> AccountType {
+        self.account_type
+    }
+
+    pub const fn is_contra(self) -> bool {
+        self.contra
     }
 }
 
@@ -64,7 +99,10 @@ impl AccountNumber {
 ///
 /// Normal side (from the type and contra flag) and permanence (from the type
 /// alone) are derived, never stored, so they can't disagree with them.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+///
+/// An account's identity is its `number()`, and maps key by number. `==`
+/// compares every field.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Account {
     number: AccountNumber,
     name: &'static str,
@@ -112,6 +150,11 @@ impl Account {
 
     pub const fn is_contra(&self) -> bool {
         self.contra
+    }
+
+    /// The account's type and contra flag together.
+    pub const fn kind(&self) -> AccountKind {
+        AccountKind::new(self.account_type, self.contra)
     }
 
     /// The side that makes this account grow: its type's normal side, or the

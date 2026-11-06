@@ -5,7 +5,8 @@ use std::fmt;
 
 use chrono::{DateTime, Utc};
 
-use super::rows::CorruptData;
+use super::rows::{CorruptData, account_type_text};
+use crate::account::{AccountKind, AccountNumber};
 use crate::idempotency::IdempotencyKey;
 use crate::money::Usd;
 use crate::reversal::ReversalError;
@@ -31,6 +32,17 @@ pub enum SaveError {
     Unstorable { what: &'static str },
     /// The transaction reverses one that isn't in the ledger.
     OriginalNotFound { original: TransactionId },
+    /// The transaction it reverses has already been reversed. A transaction is
+    /// reversed at most once. Nothing was saved.
+    AlreadyReversed { original: TransactionId },
+    /// The chart gives an account a different type or contra flag than the
+    /// ledger recorded when the account got its first entry. Those two facts
+    /// can't change once an account has entries. Nothing was saved.
+    AccountChanged {
+        account: AccountNumber,
+        recorded: AccountKind,
+        chart: AccountKind,
+    },
     /// The transaction isn't a valid reversal of the one it names.
     Reversal(ReversalError<Usd>),
     /// The database couldn't be reached or failed. The transaction may or may
@@ -39,6 +51,29 @@ pub enum SaveError {
     Unavailable(sqlx::Error),
     /// Stored data couldn't be read back.
     Corrupt(CorruptData),
+}
+
+/// The unique constraint that lets a transaction be reversed at most once
+/// (named in the migration).
+const REVERSES_UNIQUE: &str = "transactions_reverses_unique";
+
+/// Whether `error` is a database error that violated the constraint named
+/// `constraint`.
+fn violates(error: &sqlx::Error, constraint: &str) -> bool {
+    error
+        .as_database_error()
+        .and_then(|db| db.constraint())
+        .is_some_and(|name| name == constraint)
+}
+
+/// `liability`, or `contra-revenue` for a contra account.
+fn kind_text(kind: AccountKind) -> String {
+    let text = account_type_text(kind.account_type());
+    if kind.is_contra() {
+        format!("contra-{text}")
+    } else {
+        text.to_owned()
+    }
 }
 
 impl SaveError {
@@ -57,6 +92,22 @@ impl SaveError {
             }
         } else {
             SaveError::Unavailable(error)
+        }
+    }
+
+    /// Maps a database error from the `transactions` insert. A second reversal
+    /// of `reverses` violates the unique constraint on that column, which is
+    /// [`AlreadyReversed`](Self::AlreadyReversed); anything else is as in
+    /// [`from_database`](Self::from_database).
+    pub(crate) fn from_transaction_insert(
+        error: sqlx::Error,
+        reverses: Option<TransactionId>,
+    ) -> Self {
+        match reverses {
+            Some(original) if violates(&error, REVERSES_UNIQUE) => {
+                SaveError::AlreadyReversed { original }
+            }
+            _ => SaveError::from_database(error),
         }
     }
 
@@ -89,6 +140,20 @@ impl fmt::Display for SaveError {
                 f,
                 "the transaction it reverses ({}) is not in the ledger",
                 original.get()
+            ),
+            SaveError::AlreadyReversed { original } => {
+                write!(f, "transaction {} is already reversed", original.get())
+            }
+            SaveError::AccountChanged {
+                account,
+                recorded,
+                chart,
+            } => write!(
+                f,
+                "account {} is recorded as {}, but the chart says {}; an account's type and contra flag can't change once it has entries",
+                account.get(),
+                kind_text(*recorded),
+                kind_text(*chart)
             ),
             SaveError::Reversal(error) => write!(f, "invalid reversal: {error}"),
             SaveError::Unavailable(error) => write!(f, "database unavailable: {error}"),

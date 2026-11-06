@@ -8,7 +8,7 @@ use std::fmt;
 use chrono::{DateTime, Utc};
 
 use super::stored_tag::StoredTag;
-use crate::account::{AccountNumber, Side};
+use crate::account::{AccountNumber, AccountType, Side};
 use crate::idempotency::IdempotencyKey;
 use crate::money::{Money, Usd};
 use crate::transaction::{Entry, PostedTransaction, TransactionId};
@@ -66,6 +66,24 @@ impl CurrencyCode {
     }
 }
 
+/// The text `recorded_accounts.account_type` holds for `account_type`.
+pub(crate) const fn account_type_text(account_type: AccountType) -> &'static str {
+    match account_type {
+        AccountType::Asset => "asset",
+        AccountType::Liability => "liability",
+        AccountType::Equity => "equity",
+        AccountType::Revenue => "revenue",
+        AccountType::Expense => "expense",
+    }
+}
+
+/// The account type a stored text names, if it names one.
+pub(crate) fn parse_account_type(text: &str) -> Option<AccountType> {
+    AccountType::ALL
+        .into_iter()
+        .find(|account_type| account_type_text(*account_type) == text)
+}
+
 /// Why stored rows couldn't become a transaction. The database's constraints
 /// should make each of these impossible, so any of them means the data was
 /// changed behind the ledger's back. Every message names the transaction.
@@ -89,6 +107,10 @@ pub enum CorruptData {
         column: &'static str,
         value: i64,
     },
+    /// A recorded account's type isn't one the ledger knows.
+    UnknownAccountType { account: i64, value: String },
+    /// An account has no `recorded_accounts` row right after it was recorded.
+    MissingRecordedAccount { account: i64 },
     /// The stored idempotency key isn't a valid key.
     InvalidIdempotencyKey { transaction: i64, key: String },
     /// Two entry rows share a position.
@@ -127,6 +149,14 @@ impl fmt::Display for CorruptData {
             } => write!(
                 f,
                 "corrupt data in transaction {transaction}: {column} {value} is out of range"
+            ),
+            CorruptData::UnknownAccountType { account, value } => write!(
+                f,
+                "corrupt data in recorded account {account}: unknown type {value:?}"
+            ),
+            CorruptData::MissingRecordedAccount { account } => write!(
+                f,
+                "corrupt data in recorded account {account}: no row after recording it"
             ),
             CorruptData::InvalidIdempotencyKey { transaction, key } => write!(
                 f,
@@ -306,6 +336,31 @@ mod tests {
             position,
             kind: kind.to_string(),
             value: value.to_string(),
+        }
+    }
+
+    #[test]
+    fn every_account_type_round_trips_through_its_text() {
+        for account_type in AccountType::ALL {
+            assert_eq!(
+                parse_account_type(account_type_text(account_type)),
+                Some(account_type)
+            );
+        }
+        assert_eq!(parse_account_type("cash"), None);
+    }
+
+    #[sqlx::test]
+    async fn every_account_type_text_satisfies_the_sql_check(pool: sqlx::PgPool) {
+        for (number, account_type) in (1_i64..).zip(AccountType::ALL) {
+            sqlx::query(
+                "INSERT INTO recorded_accounts (number, account_type, contra) VALUES ($1, $2, false)",
+            )
+            .bind(number)
+            .bind(account_type_text(account_type))
+            .execute(&pool)
+            .await
+            .unwrap();
         }
     }
 

@@ -51,8 +51,34 @@ async fn insert_entry(
     .map(|_| ())
 }
 
-/// A valid transaction with two balanced entries, committed.
+/// Records an account, the way the ledger does on its first entry.
+async fn record_account(
+    executor: impl PgExecutor<'_>,
+    number: i64,
+    account_type: &str,
+    contra: bool,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO recorded_accounts (number, account_type, contra) VALUES ($1, $2, $3)")
+        .bind(number)
+        .bind(account_type)
+        .bind(contra)
+        .execute(executor)
+        .await
+        .map(|_| ())
+}
+
+/// Records accounts 1000 and 2000, the ones `begin_transaction_row` tests use.
+async fn record_standard_accounts(pool: &PgPool) {
+    record_account(pool, 1000, "asset", false).await.unwrap();
+    record_account(pool, 2000, "liability", false)
+        .await
+        .unwrap();
+}
+
+/// A valid transaction with two balanced entries, committed. Records accounts
+/// 1000 and 2000 first.
 async fn insert_valid(pool: &PgPool, id: i64, key: &str) {
+    record_standard_accounts(pool).await;
     let mut tx = pool.begin().await.unwrap();
     insert_transaction(
         &mut *tx,
@@ -116,6 +142,32 @@ fn violated(result: Result<(), sqlx::Error>) -> String {
         .and_then(|e| e.constraint())
         .expect("the error should name a constraint")
         .to_owned()
+}
+
+#[sqlx::test]
+async fn rejects_second_reversal_of_one_transaction(pool: PgPool) {
+    insert_valid(&pool, 1, "original").await;
+    let mut tx = pool.begin().await.unwrap();
+    insert_transaction(
+        &mut *tx,
+        2,
+        "r1",
+        "2026-01-01T00:00:00Z",
+        "2026-01-02T00:00:00Z",
+        Some(1),
+    )
+    .await
+    .unwrap();
+    let result = insert_transaction(
+        &mut *tx,
+        3,
+        "r2",
+        "2026-01-01T00:00:00Z",
+        "2026-01-02T00:00:00Z",
+        Some(1),
+    )
+    .await;
+    assert_eq!(violated(result), "transactions_reverses_unique");
 }
 
 #[sqlx::test]
@@ -212,6 +264,12 @@ async fn rejects_two_tags_of_one_kind_on_one_entry(pool: PgPool) {
 
 #[sqlx::test]
 async fn accepts_account_number_u32_max(pool: PgPool) {
+    record_account(&pool, 4_294_967_295, "asset", false)
+        .await
+        .unwrap();
+    record_account(&pool, 2000, "liability", false)
+        .await
+        .unwrap();
     let mut tx = pool.begin().await.unwrap();
     begin_transaction_row(&mut tx, 1, "key").await;
     insert_entry(&mut *tx, 1, 0, 4_294_967_295, "debit", 500, "USD")
@@ -223,7 +281,7 @@ async fn accepts_account_number_u32_max(pool: PgPool) {
     tx.commit().await.unwrap();
 }
 
-const TABLES: [&str; 3] = ["transactions", "entries", "entry_tags"];
+const TABLES: [&str; 4] = ["transactions", "entries", "entry_tags", "recorded_accounts"];
 
 /// Stores one valid transaction with a tag on its first entry.
 async fn insert_valid_with_tag(pool: &PgPool) {
@@ -241,6 +299,7 @@ async fn refuses_update(pool: PgPool) {
         ("transactions", "description = 'changed'"),
         ("entries", "amount = 1"),
         ("entry_tags", "value = 'changed'"),
+        ("recorded_accounts", "contra = true"),
     ] {
         let result = sqlx::query(AssertSqlSafe(format!("UPDATE {table} SET {set}")))
             .execute(&pool)
@@ -276,6 +335,7 @@ async fn refuses_truncate(pool: PgPool) {
 
 #[sqlx::test]
 async fn refuses_unbalanced_transaction_at_commit(pool: PgPool) {
+    record_standard_accounts(&pool).await;
     let mut tx = pool.begin().await.unwrap();
     begin_transaction_row(&mut tx, 1, "key").await;
     insert_entry(&mut *tx, 1, 0, 1000, "debit", 2160, "USD")
@@ -291,6 +351,7 @@ async fn refuses_unbalanced_transaction_at_commit(pool: PgPool) {
 
 #[sqlx::test]
 async fn refuses_single_entry_transaction_at_commit(pool: PgPool) {
+    record_standard_accounts(&pool).await;
     let mut tx = pool.begin().await.unwrap();
     begin_transaction_row(&mut tx, 1, "key").await;
     insert_entry(&mut *tx, 1, 0, 1000, "debit", 500, "USD")
@@ -312,6 +373,8 @@ async fn refuses_transaction_without_entries_at_commit(pool: PgPool) {
 
 #[sqlx::test]
 async fn accepts_balanced_three_entry_transaction(pool: PgPool) {
+    record_standard_accounts(&pool).await;
+    record_account(&pool, 3000, "revenue", false).await.unwrap();
     let mut tx = pool.begin().await.unwrap();
     begin_transaction_row(&mut tx, 1, "key").await;
     insert_entry(&mut *tx, 1, 0, 1000, "debit", 2160, "USD")
@@ -329,6 +392,7 @@ async fn accepts_balanced_three_entry_transaction(pool: PgPool) {
 #[sqlx::test]
 async fn refuses_entry_that_unbalances_a_committed_transaction(pool: PgPool) {
     insert_valid(&pool, 1, "valid").await;
+    record_account(&pool, 3000, "revenue", false).await.unwrap();
     let mut tx = pool.begin().await.unwrap();
     insert_entry(&mut *tx, 1, 2, 3000, "debit", 100, "USD")
         .await
@@ -344,6 +408,7 @@ async fn refuses_entry_that_unbalances_a_committed_transaction(pool: PgPool) {
 
 #[sqlx::test]
 async fn refuses_credits_only_transaction(pool: PgPool) {
+    record_standard_accounts(&pool).await;
     let mut tx = pool.begin().await.unwrap();
     begin_transaction_row(&mut tx, 1, "key").await;
     insert_entry(&mut *tx, 1, 0, 1000, "credit", 500, "USD")
@@ -355,4 +420,25 @@ async fn refuses_credits_only_transaction(pool: PgPool) {
     let result = tx.commit().await;
     assert!(refusal(result).contains("not balanced"));
     assert_empty(&pool).await;
+}
+
+#[sqlx::test]
+async fn rejects_entry_for_unrecorded_account(pool: PgPool) {
+    record_account(&pool, 1000, "asset", false).await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    begin_transaction_row(&mut tx, 1, "key").await;
+    let result = insert_entry(&mut *tx, 1, 0, 5000, "debit", 500, "USD").await;
+    assert_eq!(violated(result), "entries_account_fkey");
+}
+
+#[sqlx::test]
+async fn rejects_unknown_account_type(pool: PgPool) {
+    let result = record_account(&pool, 1, "cash", false).await;
+    assert_eq!(violated(result), "recorded_accounts_type_valid");
+}
+
+#[sqlx::test]
+async fn rejects_recorded_account_number_out_of_range(pool: PgPool) {
+    let result = record_account(&pool, -1, "asset", false).await;
+    assert_eq!(violated(result), "recorded_accounts_number_range");
 }

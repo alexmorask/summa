@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT number, account_type, contra FROM recorded_accounts WHERE number = ANY($1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "number",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "recorded_accounts",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "account_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "recorded_accounts",
+            "name": "account_type"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "contra",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "recorded_accounts",
+            "name": "contra"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "6e4715a2192908fcf4bbfef4766fb645450e592e231b4a7fd503225571184d81"
+}

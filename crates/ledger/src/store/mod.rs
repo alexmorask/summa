@@ -1,5 +1,6 @@
 //! Storage of the ledger in PostgreSQL.
 
+mod confirmed;
 mod error;
 mod load;
 mod rows;
@@ -19,6 +20,8 @@ use crate::clock::Clock;
 use crate::money::Usd;
 use crate::transaction::PostedTransaction;
 
+use confirmed::ConfirmedAccounts;
+
 pub use error::{LoadError, SaveError};
 pub use rows::CorruptData;
 pub use stored_tag::StoredTag;
@@ -29,6 +32,8 @@ pub struct Store<T: StoredTag> {
     pool: PgPool,
     chart: Chart,
     clock: Arc<dyn Clock>,
+    /// See [`ConfirmedAccounts`].
+    confirmed: ConfirmedAccounts,
     // `T` appears only in method signatures; this ties it to the type.
     tags: std::marker::PhantomData<fn() -> T>,
 }
@@ -41,6 +46,7 @@ impl<T: StoredTag> Store<T> {
             pool,
             chart,
             clock,
+            confirmed: ConfirmedAccounts::new(),
             tags: std::marker::PhantomData,
         }
     }

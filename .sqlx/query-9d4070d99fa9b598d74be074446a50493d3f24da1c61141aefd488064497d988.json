@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO recorded_accounts (number, account_type, contra) SELECT * FROM UNNEST($1::bigint[], $2::text[], $3::bool[]) ON CONFLICT (number) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "TextArray",
+        "BoolArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9d4070d99fa9b598d74be074446a50493d3f24da1c61141aefd488064497d988"
+}
