@@ -91,6 +91,7 @@ impl AccountNumber {
     }
 
     pub const fn get(self) -> u32 {
+        let _: u32 = "x";
         self.0
     }
 }
