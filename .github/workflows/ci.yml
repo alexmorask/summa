@@ -27,8 +27,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # rustup reads rust-toolchain.toml; the install is explicit because rustup
-      # no longer installs the pinned toolchain on first use.
+      # rustup reads rust-toolchain.toml. The install is its own step so it shows up
+      # in the log and finishes before rust-cache computes its key from `rustc`.
       - run: rustup toolchain install
       - run: cargo fmt --check
 
@@ -50,6 +50,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install
@@ -63,6 +64,7 @@ jobs:
 
   sqlx-prepare:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install
