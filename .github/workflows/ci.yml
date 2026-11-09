@@ -1,0 +1,90 @@
+name: CI
+
+# The five checks from CLAUDE.md, one job each. The job id is the check name that
+# the `main` ruleset requires (.github/rulesets/main.json): rename both together.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # A newer push to a PR supersedes the older run. Each run on `main` gets its own
+  # group (by commit), because a group keeps only one waiting run and would cancel
+  # the older waiter.
+  group: ci-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  DATABASE_URL: postgres://summa:summa@localhost:5433/summa
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # rustup reads rust-toolchain.toml. The install is its own step so it shows up
+      # in the log and finishes before rust-cache computes its key from `rustc`.
+      - run: rustup toolchain install
+      - run: cargo fmt --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo clippy --all-targets --locked -- -D warnings
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo build --locked
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # Same compose file as local development, so the PostgreSQL image is defined once.
+      - run: docker compose up -d --wait db
+      # `#[sqlx::test]` creates and migrates its own database per test.
+      - run: cargo test --locked
+      - if: failure()
+        run: docker compose logs db
+
+  sqlx-prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+      # The installed sqlx-cli binaries are cached separately below.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-bin: "false"
+      - id: sqlx-cli
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin/sqlx
+            ~/.cargo/bin/cargo-sqlx
+          key: sqlx-cli-0.9.0-${{ runner.os }}
+      - if: steps.sqlx-cli.outputs.cache-hit != 'true'
+        run: cargo install sqlx-cli --version 0.9.0 --locked --no-default-features --features rustls,postgres
+      - run: docker compose up -d --wait db
+      # `prepare --check` describes every query against the live schema, so the
+      # migrations must be applied first.
+      - run: sqlx migrate run --source crates/ledger/migrations
+      - run: cargo sqlx prepare --workspace --check -- --all-targets --all-features --locked
+      - if: failure()
+        run: docker compose logs db
