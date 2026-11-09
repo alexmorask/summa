@@ -79,7 +79,7 @@ mod tests {
     #[test]
     fn fixed_clock_returns_its_time() {
         let t = Utc.with_ymd_and_hms(2026, 10, 29, 12, 0, 0).unwrap();
-        let clock = FixedClock::new(t);
+            let clock = FixedClock::new(t);
         assert_eq!(clock.now(), t);
         assert_eq!(clock.now(), t);
     }
