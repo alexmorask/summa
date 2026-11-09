@@ -69,7 +69,7 @@ impl AccountKind {
     }
 
     pub const fn is_contra(self) -> bool {
-        return self.contra;
+        self.contra
     }
 }
 
