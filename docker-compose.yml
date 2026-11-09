@@ -10,7 +10,7 @@ services:
     volumes:
       - summa-db:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U summa -d summa"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U summa -d summa"]
       interval: 2s
       timeout: 3s
       retries: 15
