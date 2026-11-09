@@ -53,6 +53,7 @@ Each milestone adds one idea, ends with something visibly working, and starts wi
 - **Corrections link back:** a posted transaction gets an ID from the ledger, and a reversal records the ID of the transaction it cancels, so nothing is ever edited ([ADR 0006](docs/adr/0006-transaction-identity.md)).
 - **Balances as of either time:** balances are computed from entries and can be cut off by when things happened, when the books recorded them, or both, which reproduces any past report ([ADR 0007](docs/adr/0007-as-of-cutoffs.md)).
 - **Accounts keep their meaning:** the ledger records each account's type and contra flag on first use, and refuses a chart that changes them ([ADR 0010](docs/adr/0010-recorded-accounts.md)).
+- **Continuous integration:** GitHub Actions runs the five checks on every PR, and a ruleset on `main` blocks merging until they pass. Rust and PostgreSQL are pinned exactly, so a check gives the same answer every time ([ADR 0011](docs/adr/0011-continuous-integration-now-deployment-later.md)).
 - **PostgreSQL** for append-only storage, from M2.
 - **OpenTelemetry** for metrics, traces and logs, including ledger-specific signals like whether the trial balance still balances.
 - **Simulated** payment provider, tax provider and clock, so the demo can decline cards, change tax locations and fast-forward time.
@@ -63,7 +64,7 @@ Summa is built with AI agents (Claude Code) under my direction. I own the produc
 
 ## Running it
 
-Requires Rust 1.94 or later.
+Rust is pinned to 1.94.1 in `rust-toolchain.toml`; `rustup` installs it the first time you run `cargo` here. CI runs the five checks below on every PR, and `main` only accepts a PR once they all pass.
 
 ```sh
 cargo build

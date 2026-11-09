@@ -41,7 +41,7 @@ cargo clippy --all-targets -- -D warnings
 cargo sqlx prepare --workspace --check -- --all-targets --all-features
 ```
 
-All five checks must pass before a PR. `cargo build`, `clippy` and `fmt` need no database (they use the committed `.sqlx/` query data); `cargo test` needs the Docker database running. Cargo gets `DATABASE_URL` from `.cargo/config.toml`, but the `sqlx` CLI does not read that file, hence the `export`. After changing a query or migration, run `cargo sqlx prepare --workspace -- --all-targets --all-features` and commit `.sqlx/`.
+All five checks must pass before a PR. CI (`.github/workflows/ci.yml`) runs them on every PR and push to `main`, and the ruleset in `.github/rulesets/main.json` blocks merging until all five pass, with no bypass. Rust (`rust-toolchain.toml`) and PostgreSQL (`docker-compose.yml`) are pinned exactly; change either only in its own PR. `cargo build`, `clippy` and `fmt` need no database (they use the committed `.sqlx/` query data); `cargo test` needs the Docker database running. Cargo gets `DATABASE_URL` from `.cargo/config.toml`, but the `sqlx` CLI does not read that file, hence the `export`. After changing a query or migration, run `cargo sqlx prepare --workspace -- --all-targets --all-features` and commit `.sqlx/`.
 
 ## Testing
 

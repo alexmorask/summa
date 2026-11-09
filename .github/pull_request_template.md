@@ -16,9 +16,7 @@ Closes SUM-
 
 ## Checklist
 
-- [ ] `cargo fmt --check` passes
-- [ ] `cargo clippy --all-targets -- -D warnings` passes
-- [ ] `cargo test` passes
+- [ ] CI is green (`fmt`, `clippy`, `build`, `test`, `sqlx-prepare`)
 - [ ] Docs check done (each updated, or confirmed not needed):
   - [ ] README
   - [ ] CLAUDE.md
