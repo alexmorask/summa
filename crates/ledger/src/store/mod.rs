@@ -3,6 +3,8 @@
 mod confirmed;
 mod error;
 mod load;
+#[allow(dead_code, reason = "used by the balance worker in the next task")]
+mod netting;
 mod rows;
 mod save;
 #[cfg(test)]
