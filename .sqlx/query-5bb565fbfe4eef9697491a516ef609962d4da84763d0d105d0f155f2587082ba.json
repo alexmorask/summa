@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT db_tx_id::text::bigint AS \"db_tx_id!\", transaction_id FROM balance_checkpoint",
+  "query": "SELECT db_tx_id::text::bigint AS \"db_tx_id!\", transaction_id\n               FROM balance_checkpoint FOR UPDATE",
   "describe": {
     "columns": [
       {
@@ -29,5 +29,5 @@
       false
     ]
   },
-  "hash": "e5af8495da3e36f6158805213f06326b9abec564a5430f38f2045e7dc8c10389"
+  "hash": "5bb565fbfe4eef9697491a516ef609962d4da84763d0d105d0f155f2587082ba"
 }

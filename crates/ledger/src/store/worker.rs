@@ -89,8 +89,11 @@ impl BalanceWorker {
         &self,
         tx: &mut Transaction<'_, Postgres>,
     ) -> Result<BatchReport, WorkerError> {
+        // First, and locked: a second worker waits here until this batch
+        // commits, then reads the checkpoint this one moved.
         let checkpoint = sqlx::query!(
-            r#"SELECT db_tx_id::text::bigint AS "db_tx_id!", transaction_id FROM balance_checkpoint"#
+            r#"SELECT db_tx_id::text::bigint AS "db_tx_id!", transaction_id
+               FROM balance_checkpoint FOR UPDATE"#
         )
         .fetch_one(&mut **tx)
         .await

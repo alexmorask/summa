@@ -7,7 +7,9 @@ use sqlx::PgPool;
 use super::Store;
 use super::error::WorkerError;
 use super::save::Attempt;
-use super::store_tests::{build, build_in, clock_time, effective, store, store_at};
+use super::store_tests::{
+    build, build_in, clock_time, effective, store, store_at, wait_for_lock_waiter,
+};
 use super::worker::{BalanceWorker, BatchReport, WorkerConfig};
 use crate::account::{Account, AccountNumber, AccountType, Side};
 use crate::chart::Chart;
@@ -480,4 +482,64 @@ async fn open_transaction_elsewhere_only_delays_the_worker(pool: PgPool) {
     settle(&pool).await;
     assert_eq!(worker.run_batch().await.unwrap(), report(1));
     assert_eq!(totals(&pool, ASSET).await, (100, 0));
+}
+
+/// The text of the statement waiting on a lock in this database.
+async fn waiting_query(pool: &PgPool) -> String {
+    sqlx::query_scalar::<_, String>(
+        "SELECT query FROM pg_stat_activity \
+         WHERE datname = current_database() AND wait_event_type = 'Lock'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+#[sqlx::test]
+async fn second_worker_waits_on_the_checkpoint_lock_before_reading(pool: PgPool) {
+    let store = store(&pool);
+    for key_text in ["renewal-1", "renewal-2"] {
+        save(&store, &base_keyed(key_text)).await;
+    }
+    settle(&pool).await;
+
+    let mut other = pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM balance_checkpoint FOR UPDATE")
+        .execute(&mut *other)
+        .await
+        .unwrap();
+    let second = worker(&pool, 1_000);
+    let batch = tokio::spawn(async move { second.run_batch().await });
+    wait_for_lock_waiter(&pool).await;
+
+    let waiting = waiting_query(&pool).await;
+    assert!(waiting.contains("balance_checkpoint"), "{waiting}");
+    assert!(waiting.contains("FOR UPDATE"), "{waiting}");
+
+    other.commit().await.unwrap();
+    assert_eq!(batch.await.unwrap().unwrap(), report(2));
+    assert_eq!(totals(&pool, ASSET).await, (200, 0));
+    assert_eq!(totals(&pool, REVENUE).await, (0, 200));
+}
+
+#[sqlx::test]
+async fn batch_started_while_another_commits_counts_once(pool: PgPool) {
+    let store = store(&pool);
+    for key_text in ["renewal-1", "renewal-2"] {
+        save(&store, &base_keyed(key_text)).await;
+    }
+    settle(&pool).await;
+
+    let first = worker(&pool, 1_000);
+    let mut tx_a = pool.begin().await.unwrap();
+    assert_eq!(first.batch_on(&mut tx_a).await.unwrap(), report(2));
+    let second = worker(&pool, 1_000);
+    let batch = tokio::spawn(async move { second.run_batch().await });
+    wait_for_lock_waiter(&pool).await;
+
+    tx_a.commit().await.unwrap();
+    assert_eq!(batch.await.unwrap().unwrap(), report(0));
+    assert_eq!(totals(&pool, ASSET).await, (200, 0));
+    assert_eq!(totals(&pool, REVENUE).await, (0, 200));
+    assert_eq!(tag_totals(&pool, ASSET, "alpha", "1").await, (200, 0));
 }
