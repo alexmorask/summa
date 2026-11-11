@@ -27,7 +27,10 @@ pub use idempotency::{IdempotencyKey, IdempotencyKeyError};
 pub use money::{Currency, Money, MoneyError, Usd};
 pub use reversal::ReversalError;
 #[cfg(feature = "postgres")]
-pub use store::{CorruptData, LoadError, SaveError, Saved, Store, StoredBalanceError, StoredTag};
+pub use store::{
+    BalanceWorker, BatchReport, CorruptData, LoadError, SaveError, Saved, Store,
+    StoredBalanceError, StoredTag, WorkerConfig, WorkerError,
+};
 pub use tag::Tag;
 pub use transaction::{
     Entry, PostError, PostedTransaction, TransactionBuilder, TransactionError, TransactionId,

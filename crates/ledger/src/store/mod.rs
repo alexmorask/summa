@@ -12,7 +12,6 @@ mod schema_tests;
 mod store_tests;
 mod stored_balance;
 mod stored_tag;
-#[allow(dead_code, reason = "exported from the crate in a later task")]
 mod worker;
 #[cfg(test)]
 mod worker_tests;
@@ -28,9 +27,10 @@ use crate::transaction::PostedTransaction;
 
 use confirmed::ConfirmedAccounts;
 
-pub use error::{LoadError, SaveError, StoredBalanceError};
+pub use error::{LoadError, SaveError, StoredBalanceError, WorkerError};
 pub use rows::CorruptData;
 pub use stored_tag::StoredTag;
+pub use worker::{BalanceWorker, BatchReport, WorkerConfig};
 
 /// The ledger's PostgreSQL store. It owns the chart posting checks against
 /// and the clock that stamps recorded times; callers supply neither per call.
