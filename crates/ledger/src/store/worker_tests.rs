@@ -758,6 +758,69 @@ async fn lag_counts_readable_transactions_after_the_checkpoint(pool: PgPool) {
     assert_eq!(worker.lag().await.unwrap(), 0);
 }
 
+#[sqlx::test]
+async fn lag_counts_committed_postings_held_back_by_the_safe_line(pool: PgPool) {
+    record_base_accounts(&pool).await;
+    let store = store(&pool);
+    save(&store, &base_keyed("renewal-1")).await;
+    settle(&pool).await;
+    let worker = worker(&pool, 1_000);
+    assert_eq!(worker.catch_up().await.unwrap(), 1);
+
+    // An open transaction that has taken an id holds the safe line back.
+    let mut holder = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_current_xact_id()")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    save(&store, &base_keyed("renewal-2")).await;
+
+    assert_eq!(
+        worker.lag().await.unwrap(),
+        1,
+        "a committed posting behind the line is lag"
+    );
+    assert_eq!(worker.run_batch().await.unwrap(), report(0));
+
+    holder.rollback().await.unwrap();
+    settle(&pool).await;
+    assert_eq!(worker.catch_up().await.unwrap(), 1);
+    assert_eq!(worker.lag().await.unwrap(), 0);
+}
+
+#[sqlx::test]
+async fn batch_waiting_on_a_rebuild_counts_everything_from_the_start(pool: PgPool) {
+    let store = store(&pool);
+    for n in 1..=2 {
+        save(&store, &base_keyed(&format!("renewal-{n}"))).await;
+    }
+    settle(&pool).await;
+    let worker = worker(&pool, 1_000);
+    assert_eq!(worker.catch_up().await.unwrap(), 2);
+    assert_ne!(checkpoint(&pool).await, (0, 0));
+
+    // A rebuild's reset, held open: the checkpoint moves back at commit.
+    let mut reset = pool.begin().await.unwrap();
+    worker.reset_on(&mut reset).await.unwrap();
+    let waiting = self::worker(&pool, 1_000);
+    let batch = tokio::spawn(async move { waiting.run_batch().await });
+    wait_for_lock_waiter(&pool).await;
+
+    reset.commit().await.unwrap();
+    assert_eq!(batch.await.unwrap().unwrap(), report(2));
+    assert_eq!(totals(&pool, ASSET).await, (200, 0));
+    assert_eq!(totals(&pool, REVENUE).await, (0, 200));
+    assert_eq!(tag_totals(&pool, ASSET, "alpha", "1").await, (200, 0));
+    let last: i64 = sqlx::query_scalar("SELECT max(id) FROM transactions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        checkpoint(&pool).await,
+        (db_tx_id_of(&pool, last).await, last)
+    );
+}
+
 // --- Reading stored balances ---
 
 /// Saves `entries` as a transaction with `key_text`, settles, and catches up.
@@ -854,7 +917,7 @@ async fn account_not_in_chart_is_an_error(pool: PgPool) {
 async fn stored_balance_matches_balance_for_every_account_and_tag(pool: PgPool) {
     let store = store(&pool);
     let worker_handle = |size| worker(&pool, size);
-    let mut runner = TestRunner::default();
+    let mut runner = TestRunner::deterministic();
     let transactions = prop::collection::vec(valid_entries_with_varied_tags(), 2..=5);
     let sizes = 1_u32..=4;
     let mut saved: Vec<PostedTransaction<Usd, TestTag>> = Vec::new();
@@ -886,13 +949,14 @@ async fn stored_balance_matches_balance_for_every_account_and_tag(pool: PgPool) 
                     .unwrap(),
             );
         }
+        let context = format!("batch size {size}, scenario entries {batch:?}");
         settle(&pool).await;
         worker_handle(size).catch_up().await.unwrap();
-        assert_stored_matches(&store, &saved, &accounts, &tags).await;
+        assert_stored_matches(&store, &saved, &accounts, &tags, &context).await;
 
         settle(&pool).await;
         worker_handle(size).rebuild().await.unwrap();
-        assert_stored_matches(&store, &saved, &accounts, &tags).await;
+        assert_stored_matches(&store, &saved, &accounts, &tags, &context).await;
     }
 }
 
@@ -901,6 +965,7 @@ async fn assert_stored_matches(
     saved: &[PostedTransaction<Usd, TestTag>],
     accounts: &[AccountNumber],
     tags: &[Option<TestTag>],
+    context: &str,
 ) {
     for &account in accounts {
         for tag in tags {
@@ -910,7 +975,12 @@ async fn assert_stored_matches(
             };
             let expected = balance(saved, &chart(), &query).unwrap();
             let stored = store.stored_balance(account, tag.as_ref()).await.unwrap();
-            assert_eq!(stored, expected, "account {} tag {tag:?}", account.get());
+            assert_eq!(
+                stored,
+                expected,
+                "account {} tag {tag:?}; {context}",
+                account.get()
+            );
         }
     }
 }

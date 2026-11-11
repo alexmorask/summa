@@ -726,7 +726,7 @@ async fn lock_waiters(pool: &PgPool) -> i64 {
     .unwrap()
 }
 
-/// Waits until some save is blocked on a lock. Polling is bounded, not timed:
+/// Waits until some statement is blocked on a lock. Polling is bounded, not timed:
 /// it ends as soon as the interleaving has happened.
 pub(super) async fn wait_for_lock_waiter(pool: &PgPool) {
     let polling = async {
@@ -736,7 +736,7 @@ pub(super) async fn wait_for_lock_waiter(pool: &PgPool) {
     };
     tokio::time::timeout(std::time::Duration::from_secs(10), polling)
         .await
-        .expect("save B never blocked on save A's uncommitted insert");
+        .expect("some statement never blocked on a lock");
 }
 
 /// Save A inserts `a` and stays open; save B of `b` runs on its own store and

@@ -22,7 +22,7 @@ ADR 0008 fixed the log order: `(db_tx_id, id)`, read only behind a safe line, be
 - **Errors.** Transient errors (a dropped connection, a deadlock) are retried a few times with a growing wait. A permanent error stops the worker and names the transaction it failed on. Nothing is ever skipped, including after N retries.
 - **Netting in Rust.** Each batch is loaded through the existing row types, netted in a `HashMap` and added with `checked_add`. A total that would overflow is a permanent error.
 - **Polling.** The loop runs a batch and either goes again or waits a short interval. Every wait goes through a `pause` closure the caller supplies, so the worker never reads the clock (ADR 0003) and tests never sleep.
-- **No timeout on a stuck safe line.** A long-running transaction elsewhere only delays the worker. It shows up as lag, never as a wrong balance. This ticket adds no timeout or cap.
+- **No timeout on a stuck safe line.** A long-running transaction elsewhere only delays the worker. Committed postings it holds back are counted by `lag`, so it shows up as lag, never as a wrong balance. This ticket adds no timeout or cap.
 
 ## Alternatives considered
 
@@ -37,5 +37,5 @@ ADR 0008 fixed the log order: `(db_tx_id, id)`, read only behind a safe line, be
 - **The safe line is server-wide.** `pg_snapshot_xmin` covers every database on the PostgreSQL server, so a long transaction in any database on the same server delays the worker. The result is lag, never wrong balances. A dedicated ledger at real scale therefore means its own PostgreSQL server, not only its own database. The Ledger Core design doc says so.
 - **Tests use a bounded `settle` wait.** The worker's tests run in parallel, each in its own database on one server, and they share the safe line. A test waits, bounded, for the line to pass its postings rather than assuming it already has.
 - **A poison entry stops all balances behind it** until a person fixes the cause. That is deliberate, and a worker-stopped signal is needed to make it visible.
-- **Lag is exposed as data** by `BalanceWorker::lag`, counted in ledger transactions rather than time. SUM-12 emits it, with the age of the oldest running database transaction and the worker-stopped signal.
+- **Lag is exposed as data** by `BalanceWorker::lag`, counted in ledger transactions rather than time. It counts every committed ledger transaction after the checkpoint, including postings the safe line is still holding back, in one statement; an uncommitted posting is not counted. It is a point-in-time measure. SUM-12 emits it, with the age of the oldest running database transaction and the worker-stopped signal.
 - **Nothing runs the worker yet.** SUM-11 is library code. SUM-13 (the playground) is the first thing that runs it.

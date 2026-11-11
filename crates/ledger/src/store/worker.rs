@@ -121,20 +121,30 @@ impl BalanceWorker {
     /// batch, so it waits for a running batch and no batch sees a half-reset.
     pub async fn reset(&self) -> Result<(), WorkerError> {
         let mut tx = self.pool.begin().await.map_err(WorkerError::Unavailable)?;
-        lock_checkpoint(&mut tx).await?;
+        self.reset_on(&mut tx).await?;
+        tx.commit().await.map_err(WorkerError::Unavailable)
+    }
+
+    /// The reset inside `tx`: everything but begin and commit. A separate
+    /// method so a test can hold the reset open.
+    pub(crate) async fn reset_on(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+    ) -> Result<(), WorkerError> {
+        lock_checkpoint(tx).await?;
         sqlx::query!("DELETE FROM tag_balances")
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(WorkerError::Unavailable)?;
         sqlx::query!("DELETE FROM account_balances")
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(WorkerError::Unavailable)?;
         sqlx::query!("UPDATE balance_checkpoint SET db_tx_id = '0'::xid8, transaction_id = 0")
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(WorkerError::Unavailable)?;
-        tx.commit().await.map_err(WorkerError::Unavailable)
+        Ok(())
     }
 
     /// Resets, then replays the whole log. Returns how many ledger
@@ -144,23 +154,17 @@ impl BalanceWorker {
         self.catch_up().await
     }
 
-    /// How many ledger transactions are after the checkpoint and below the
-    /// safe line: what the next batches have left to count.
+    /// How many committed ledger transactions are after the checkpoint,
+    /// whether or not the safe line lets the next batch count them yet. A
+    /// posting held back by a long-running transaction elsewhere is lag. One
+    /// statement reads the checkpoint and the log together, but the answer is
+    /// only a point-in-time measure: postings keep arriving.
     pub async fn lag(&self) -> Result<u64, WorkerError> {
-        let checkpoint = sqlx::query!(
-            r#"SELECT db_tx_id::text::bigint AS "db_tx_id!", transaction_id
-               FROM balance_checkpoint"#
-        )
-        .fetch_one(&self.pool)
-        .await
-        .map_err(WorkerError::Unavailable)?;
-        // The same predicate as the read in `batch_on`; keep the two in step.
         let row = sqlx::query!(
             r#"SELECT count(*) AS "lag!" FROM transactions
-               WHERE (db_tx_id, id) > ($1::text::xid8, $2)
-                 AND db_tx_id < pg_snapshot_xmin(pg_current_snapshot())"#,
-            checkpoint.db_tx_id.to_string(),
-            checkpoint.transaction_id
+               WHERE (db_tx_id, id) > (
+                   SELECT db_tx_id, transaction_id FROM balance_checkpoint
+               )"#
         )
         .fetch_one(&self.pool)
         .await
