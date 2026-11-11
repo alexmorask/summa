@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT debit_total, credit_total FROM account_balances WHERE account = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "debit_total",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "account_balances",
+            "name": "debit_total"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "credit_total",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "account_balances",
+            "name": "credit_total"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "45a944cb659620f392cb73d4db6fbae83b9dc46fcd09d1693d38af23454265b8"
+}

@@ -10,6 +10,7 @@ mod save;
 mod schema_tests;
 #[cfg(test)]
 mod store_tests;
+mod stored_balance;
 mod stored_tag;
 #[allow(dead_code, reason = "exported from the crate in a later task")]
 mod worker;
@@ -27,7 +28,7 @@ use crate::transaction::PostedTransaction;
 
 use confirmed::ConfirmedAccounts;
 
-pub use error::{LoadError, SaveError};
+pub use error::{LoadError, SaveError, StoredBalanceError};
 pub use rows::CorruptData;
 pub use stored_tag::StoredTag;
 

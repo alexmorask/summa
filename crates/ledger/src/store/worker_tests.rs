@@ -5,20 +5,27 @@ use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use proptest::prelude::prop;
+use proptest::strategy::{Strategy, ValueTree};
+use proptest::test_runner::TestRunner;
 use sqlx::PgPool;
 
 use super::Store;
-use super::error::WorkerError;
+use super::error::{StoredBalanceError, WorkerError};
 use super::save::Attempt;
 use super::store_tests::{
     build, build_in, clock_time, effective, store, store_at, wait_for_lock_waiter,
 };
 use super::worker::{BalanceWorker, BatchReport, WorkerConfig};
 use crate::account::{Account, AccountNumber, AccountType, Side};
+use crate::balance::{BalanceError, BalanceQuery, balance};
 use crate::chart::Chart;
 use crate::money::Usd;
-use crate::test_support::{ASSET, REVENUE, TestEntry, TestTag, chart, key};
-use crate::transaction::UnpostedTransaction;
+use crate::test_support::{
+    ASSET, CONTRA_REVENUE, LIABILITY, NOT_IN_CHART, REVENUE, TestEntry, TestTag, chart, key, usd,
+    valid_entries_with_varied_tags,
+};
+use crate::transaction::{PostedTransaction, UnpostedTransaction};
 
 const CASH: AccountNumber = AccountNumber::new(1010);
 const DEFERRED_REVENUE: AccountNumber = AccountNumber::new(2000);
@@ -749,4 +756,161 @@ async fn lag_counts_readable_transactions_after_the_checkpoint(pool: PgPool) {
 
     assert_eq!(worker.catch_up().await.unwrap(), 1);
     assert_eq!(worker.lag().await.unwrap(), 0);
+}
+
+// --- Reading stored balances ---
+
+/// Saves `entries` as a transaction with `key_text`, settles, and catches up.
+async fn save_and_catch_up(
+    pool: &PgPool,
+    store: &Store<TestTag>,
+    key_text: &str,
+    entries: &[TestEntry],
+) {
+    store
+        .save(&build(key_text, "Stored", effective(), entries))
+        .await
+        .unwrap();
+    settle(pool).await;
+    worker(pool, 4).catch_up().await.unwrap();
+}
+
+#[sqlx::test]
+async fn contra_account_reads_on_its_debit_side(pool: PgPool) {
+    let store = store(&pool);
+    // Debit the contra-revenue account, credit revenue: 100 cents each.
+    save_and_catch_up(
+        &pool,
+        &store,
+        "contra-1",
+        &[
+            (CONTRA_REVENUE, Side::Debit, 100, vec![]),
+            (REVENUE, Side::Credit, 100, vec![]),
+        ],
+    )
+    .await;
+    assert_eq!(
+        store.stored_balance(CONTRA_REVENUE, None).await.unwrap(),
+        usd(100)
+    );
+    assert_eq!(store.stored_balance(REVENUE, None).await.unwrap(), usd(100));
+}
+
+#[sqlx::test]
+async fn abnormal_balance_is_negative(pool: PgPool) {
+    let store = store(&pool);
+    // Credit an asset: its normal side is debit, so the balance is -100.
+    save_and_catch_up(
+        &pool,
+        &store,
+        "abnormal-1",
+        &[
+            (ASSET, Side::Credit, 100, vec![]),
+            (REVENUE, Side::Debit, 100, vec![]),
+        ],
+    )
+    .await;
+    assert_eq!(store.stored_balance(ASSET, None).await.unwrap(), usd(-100));
+}
+
+#[sqlx::test]
+async fn known_account_with_no_row_reads_zero(pool: PgPool) {
+    let store = store(&pool);
+    assert_eq!(store.stored_balance(LIABILITY, None).await.unwrap(), usd(0));
+}
+
+#[sqlx::test]
+async fn tag_balance_with_no_row_reads_zero(pool: PgPool) {
+    let store = store(&pool);
+    save_and_catch_up(&pool, &store, "tagged-1", &base_entries()).await;
+    assert_eq!(
+        store
+            .stored_balance(ASSET, Some(&TestTag::Alpha(1)))
+            .await
+            .unwrap(),
+        usd(100)
+    );
+    assert_eq!(
+        store
+            .stored_balance(ASSET, Some(&TestTag::Beta(2)))
+            .await
+            .unwrap(),
+        usd(0)
+    );
+}
+
+#[sqlx::test]
+async fn account_not_in_chart_is_an_error(pool: PgPool) {
+    let store = store(&pool);
+    match store.stored_balance(NOT_IN_CHART, None).await {
+        Err(StoredBalanceError::Balance(BalanceError::UnknownAccount { account })) => {
+            assert_eq!(account, NOT_IN_CHART);
+        }
+        other => panic!("expected UnknownAccount, got {other:?}"),
+    }
+}
+
+#[sqlx::test]
+async fn stored_balance_matches_balance_for_every_account_and_tag(pool: PgPool) {
+    let store = store(&pool);
+    let worker_handle = |size| worker(&pool, size);
+    let mut runner = TestRunner::default();
+    let transactions = prop::collection::vec(valid_entries_with_varied_tags(), 2..=5);
+    let sizes = 1_u32..=4;
+    let mut saved: Vec<PostedTransaction<Usd, TestTag>> = Vec::new();
+    let mut counter = 0_u32;
+    let accounts = [ASSET, LIABILITY, REVENUE, CONTRA_REVENUE];
+    let tags: Vec<Option<TestTag>> = std::iter::once(None)
+        .chain((0..3).flat_map(|n| [Some(TestTag::Alpha(n)), Some(TestTag::Beta(n))]))
+        .collect();
+
+    for _scenario in 0..8 {
+        let batch = transactions.new_tree(&mut runner).unwrap().current();
+        let size = sizes.new_tree(&mut runner).unwrap().current();
+        for entries in &batch {
+            counter += 1;
+            let result = store
+                .save(&build(
+                    &format!("stored-{counter}"),
+                    "Generated",
+                    effective(),
+                    entries,
+                ))
+                .await
+                .unwrap();
+            saved.push(
+                store
+                    .load(result.transaction().id())
+                    .await
+                    .unwrap()
+                    .unwrap(),
+            );
+        }
+        settle(&pool).await;
+        worker_handle(size).catch_up().await.unwrap();
+        assert_stored_matches(&store, &saved, &accounts, &tags).await;
+
+        settle(&pool).await;
+        worker_handle(size).rebuild().await.unwrap();
+        assert_stored_matches(&store, &saved, &accounts, &tags).await;
+    }
+}
+
+async fn assert_stored_matches(
+    store: &Store<TestTag>,
+    saved: &[PostedTransaction<Usd, TestTag>],
+    accounts: &[AccountNumber],
+    tags: &[Option<TestTag>],
+) {
+    for &account in accounts {
+        for tag in tags {
+            let query = match tag {
+                Some(tag) => BalanceQuery::account(account).tagged(tag.clone()),
+                None => BalanceQuery::account(account),
+            };
+            let expected = balance(saved, &chart(), &query).unwrap();
+            let stored = store.stored_balance(account, tag.as_ref()).await.unwrap();
+            assert_eq!(stored, expected, "account {} tag {tag:?}", account.get());
+        }
+    }
 }

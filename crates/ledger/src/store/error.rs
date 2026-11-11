@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 
 use super::rows::{CorruptData, account_type_text};
 use crate::account::{AccountKind, AccountNumber};
+use crate::balance::BalanceError;
 use crate::idempotency::IdempotencyKey;
 use crate::money::Usd;
 use crate::reversal::ReversalError;
@@ -247,6 +248,34 @@ impl Error for WorkerError {
         match self {
             WorkerError::Unavailable(error) => Some(error),
             WorkerError::Corrupt(_) | WorkerError::Overflow { .. } => None,
+        }
+    }
+}
+
+/// Why `stored_balance` couldn't read a balance.
+#[derive(Debug)]
+pub enum StoredBalanceError {
+    /// The account isn't in the chart, or the balance doesn't fit in the
+    /// ledger's integer amounts.
+    Balance(BalanceError),
+    /// The database couldn't be reached or failed. Reading again is safe.
+    Unavailable(sqlx::Error),
+}
+
+impl fmt::Display for StoredBalanceError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StoredBalanceError::Balance(error) => write!(f, "{error}"),
+            StoredBalanceError::Unavailable(error) => write!(f, "database unavailable: {error}"),
+        }
+    }
+}
+
+impl Error for StoredBalanceError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            StoredBalanceError::Balance(error) => Some(error),
+            StoredBalanceError::Unavailable(error) => Some(error),
         }
     }
 }
