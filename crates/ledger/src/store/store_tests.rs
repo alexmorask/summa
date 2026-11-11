@@ -22,25 +22,25 @@ use crate::test_support::{
 use crate::transaction::{PostError, TransactionId, UnpostedTransaction};
 
 /// 2026-10-01T12:00:00Z: the store's clock in these tests.
-fn clock_time() -> DateTime<Utc> {
+pub(super) fn clock_time() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 10, 1, 12, 0, 0).unwrap()
 }
 
 /// An effective time safely before `clock_time()`.
-fn effective() -> DateTime<Utc> {
+pub(super) fn effective() -> DateTime<Utc> {
     clock_time() - TimeDelta::days(1)
 }
 
-fn store_at(pool: &PgPool, chart: Chart, now: DateTime<Utc>) -> Store<TestTag> {
+pub(super) fn store_at(pool: &PgPool, chart: Chart, now: DateTime<Utc>) -> Store<TestTag> {
     Store::new(pool.clone(), chart, Arc::new(FixedClock::new(now)))
 }
 
-fn store(pool: &PgPool) -> Store<TestTag> {
+pub(super) fn store(pool: &PgPool) -> Store<TestTag> {
     store_at(pool, chart(), clock_time())
 }
 
 /// A transaction built from `entries`, against `chart`.
-fn build_in(
+pub(super) fn build_in(
     chart: &Chart,
     key_text: &str,
     description: &str,
@@ -61,7 +61,7 @@ fn build_in(
         .unwrap()
 }
 
-fn build(
+pub(super) fn build(
     key_text: &str,
     description: &str,
     effective_at: DateTime<Utc>,
@@ -728,7 +728,7 @@ async fn lock_waiters(pool: &PgPool) -> i64 {
 
 /// Waits until some save is blocked on a lock. Polling is bounded, not timed:
 /// it ends as soon as the interleaving has happened.
-async fn wait_for_lock_waiter(pool: &PgPool) {
+pub(super) async fn wait_for_lock_waiter(pool: &PgPool) {
     let polling = async {
         while lock_waiters(pool).await < 1 {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO account_balances (account, debit_total, credit_total) SELECT * FROM UNNEST($1::bigint[], $2::bigint[], $3::bigint[]) ON CONFLICT (account) DO UPDATE SET debit_total = EXCLUDED.debit_total, credit_total = EXCLUDED.credit_total",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "Int8Array",
+        "Int8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "218dbc69057ab559c4d1cdaeef8f0e0c99ce964e798b67e9fcf8f2114be1b87f"
+}

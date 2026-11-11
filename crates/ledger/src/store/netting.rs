@@ -23,6 +23,7 @@ impl Totals {
 
     /// The normal side's total minus the other side's, the same definition
     /// as `balance` without cutoffs.
+    #[allow(dead_code, reason = "used by `stored_balance` in a later task")]
     pub(crate) fn net(self, normal: Side) -> Result<Money<Usd>, MoneyError> {
         match normal {
             Side::Debit => self.debit.checked_sub(self.credit),

@@ -3,7 +3,6 @@
 mod confirmed;
 mod error;
 mod load;
-#[allow(dead_code, reason = "used by the balance worker in the next task")]
 mod netting;
 mod rows;
 mod save;
@@ -12,6 +11,10 @@ mod schema_tests;
 #[cfg(test)]
 mod store_tests;
 mod stored_tag;
+#[allow(dead_code, reason = "exported from the crate in a later task")]
+mod worker;
+#[cfg(test)]
+mod worker_tests;
 
 use std::sync::Arc;
 

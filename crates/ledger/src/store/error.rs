@@ -1,4 +1,4 @@
-//! What can go wrong saving or loading a transaction.
+//! What can go wrong saving or loading a transaction, or running the balance worker.
 
 use std::error::Error;
 use std::fmt;
@@ -203,6 +203,51 @@ impl From<LoadError> for SaveError {
         match error {
             LoadError::Unavailable(error) => SaveError::Unavailable(error),
             LoadError::Corrupt(error) => SaveError::Corrupt(error),
+        }
+    }
+}
+
+/// Why a balance worker batch didn't finish. A failed batch writes nothing:
+/// the balances and the checkpoint stay as they were.
+#[derive(Debug)]
+pub enum WorkerError {
+    /// The database couldn't be reached or failed. Running the batch again
+    /// is safe.
+    Unavailable(sqlx::Error),
+    /// Stored entries couldn't be read back.
+    Corrupt(CorruptData),
+    /// Adding `transaction` would take a balance total beyond what an `i64`
+    /// holds. Running the batch again fails the same way.
+    Overflow { transaction: i64 },
+}
+
+impl WorkerError {
+    /// Whether running the batch again might succeed. True only for
+    /// [`Unavailable`](Self::Unavailable); every other error repeats.
+    #[allow(dead_code, reason = "used by the worker loop in a later task")]
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, WorkerError::Unavailable(_))
+    }
+}
+
+impl fmt::Display for WorkerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WorkerError::Unavailable(error) => write!(f, "database unavailable: {error}"),
+            WorkerError::Corrupt(error) => write!(f, "{error}"),
+            WorkerError::Overflow { transaction } => write!(
+                f,
+                "balance worker stopped at transaction {transaction}: a balance total would overflow"
+            ),
+        }
+    }
+}
+
+impl Error for WorkerError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            WorkerError::Unavailable(error) => Some(error),
+            WorkerError::Corrupt(_) | WorkerError::Overflow { .. } => None,
         }
     }
 }
