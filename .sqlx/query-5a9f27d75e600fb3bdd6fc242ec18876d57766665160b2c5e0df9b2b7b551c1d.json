@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM account_balances",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "5a9f27d75e600fb3bdd6fc242ec18876d57766665160b2c5e0df9b2b7b551c1d"
+}

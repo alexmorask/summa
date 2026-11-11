@@ -642,3 +642,111 @@ async fn permanent_error_stops_without_retrying(pool: PgPool) {
     assert!(waits_of(&waits).is_empty());
     assert_eq!(checkpoint(&pool).await, (0, 0));
 }
+
+/// Both balance tables as sorted rows, for comparing before and after.
+async fn snapshot(pool: &PgPool) -> (Vec<(i64, i64, i64)>, Vec<(i64, String, String, i64, i64)>) {
+    let accounts = sqlx::query_as::<_, (i64, i64, i64)>(
+        "SELECT account, debit_total, credit_total FROM account_balances ORDER BY account",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    let tags = sqlx::query_as::<_, (i64, String, String, i64, i64)>(
+        "SELECT account, kind, value, debit_total, credit_total FROM tag_balances \
+         ORDER BY account, kind, value",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    (accounts, tags)
+}
+
+#[sqlx::test]
+async fn reset_clears_balances_and_returns_the_checkpoint_to_the_start(pool: PgPool) {
+    let store = store(&pool);
+    for n in 1..=2 {
+        save(&store, &base_keyed(&format!("renewal-{n}"))).await;
+    }
+    settle(&pool).await;
+    let worker = worker(&pool, 1_000);
+    assert_eq!(worker.catch_up().await.unwrap(), 2);
+    assert!(balance_row_count(&pool).await > 0);
+
+    worker.reset().await.unwrap();
+    assert_eq!(balance_row_count(&pool).await, 0);
+    assert_eq!(checkpoint(&pool).await, (0, 0));
+}
+
+#[sqlx::test]
+async fn rebuild_matches_the_incremental_balances(pool: PgPool) {
+    let store = store(&pool);
+    for n in 1..=4 {
+        save(&store, &base_keyed(&format!("renewal-{n}"))).await;
+    }
+    settle(&pool).await;
+    let worker = worker(&pool, 2);
+    assert_eq!(worker.catch_up().await.unwrap(), 4);
+    let before = snapshot(&pool).await;
+    let end = checkpoint(&pool).await;
+    assert!(!before.0.is_empty() && !before.1.is_empty());
+
+    assert_eq!(worker.rebuild().await.unwrap(), 4);
+    assert_eq!(snapshot(&pool).await, before);
+    assert_eq!(checkpoint(&pool).await, end);
+}
+
+#[sqlx::test]
+async fn rebuild_during_a_batch_waits_for_the_lock(pool: PgPool) {
+    let store = store(&pool);
+    for n in 1..=2 {
+        save(&store, &base_keyed(&format!("renewal-{n}"))).await;
+    }
+    settle(&pool).await;
+
+    let first = worker(&pool, 1_000);
+    let mut tx_a = pool.begin().await.unwrap();
+    assert_eq!(first.batch_on(&mut tx_a).await.unwrap(), report(2));
+    let second = worker(&pool, 1_000);
+    let rebuild = tokio::spawn(async move { second.rebuild().await });
+    wait_for_lock_waiter(&pool).await;
+
+    tx_a.commit().await.unwrap();
+    assert_eq!(rebuild.await.unwrap().unwrap(), 2);
+    assert_eq!(totals(&pool, ASSET).await, (200, 0));
+    assert_eq!(totals(&pool, REVENUE).await, (0, 200));
+    assert_eq!(tag_totals(&pool, ASSET, "alpha", "1").await, (200, 0));
+    let last: i64 = sqlx::query_scalar("SELECT max(id) FROM transactions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        checkpoint(&pool).await,
+        (db_tx_id_of(&pool, last).await, last)
+    );
+}
+
+#[sqlx::test]
+async fn lag_counts_readable_transactions_after_the_checkpoint(pool: PgPool) {
+    record_base_accounts(&pool).await;
+    let store = store(&pool);
+    for n in 1..=3 {
+        save(&store, &base_keyed(&format!("renewal-{n}"))).await;
+    }
+    settle(&pool).await;
+    let worker = worker(&pool, 2);
+    assert_eq!(worker.lag().await.unwrap(), 3);
+
+    assert_eq!(worker.run_batch().await.unwrap(), report(2));
+    assert_eq!(worker.lag().await.unwrap(), 1);
+
+    let (held, _) = hold_open(&pool, &store, &base_keyed("renewal-held")).await;
+    assert_eq!(
+        worker.lag().await.unwrap(),
+        1,
+        "an open posting is not counted"
+    );
+    held.rollback().await.unwrap();
+
+    assert_eq!(worker.catch_up().await.unwrap(), 1);
+    assert_eq!(worker.lag().await.unwrap(), 0);
+}

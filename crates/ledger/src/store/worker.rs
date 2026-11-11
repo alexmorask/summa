@@ -116,6 +116,59 @@ impl BalanceWorker {
         Ok(())
     }
 
+    /// Clears both balance tables and returns the checkpoint to the start, in
+    /// one database transaction. It takes the checkpoint lock first, like a
+    /// batch, so it waits for a running batch and no batch sees a half-reset.
+    pub async fn reset(&self) -> Result<(), WorkerError> {
+        let mut tx = self.pool.begin().await.map_err(WorkerError::Unavailable)?;
+        lock_checkpoint(&mut tx).await?;
+        sqlx::query!("DELETE FROM tag_balances")
+            .execute(&mut *tx)
+            .await
+            .map_err(WorkerError::Unavailable)?;
+        sqlx::query!("DELETE FROM account_balances")
+            .execute(&mut *tx)
+            .await
+            .map_err(WorkerError::Unavailable)?;
+        sqlx::query!("UPDATE balance_checkpoint SET db_tx_id = '0'::xid8, transaction_id = 0")
+            .execute(&mut *tx)
+            .await
+            .map_err(WorkerError::Unavailable)?;
+        tx.commit().await.map_err(WorkerError::Unavailable)
+    }
+
+    /// Resets, then replays the whole log. Returns how many ledger
+    /// transactions it counted.
+    pub async fn rebuild(&self) -> Result<u64, WorkerError> {
+        self.reset().await?;
+        self.catch_up().await
+    }
+
+    /// How many ledger transactions are after the checkpoint and below the
+    /// safe line: what the next batches have left to count.
+    pub async fn lag(&self) -> Result<u64, WorkerError> {
+        let checkpoint = sqlx::query!(
+            r#"SELECT db_tx_id::text::bigint AS "db_tx_id!", transaction_id
+               FROM balance_checkpoint"#
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(WorkerError::Unavailable)?;
+        // The same predicate as the read in `batch_on`; keep the two in step.
+        let row = sqlx::query!(
+            r#"SELECT count(*) AS "lag!" FROM transactions
+               WHERE (db_tx_id, id) > ($1::text::xid8, $2)
+                 AND db_tx_id < pg_snapshot_xmin(pg_current_snapshot())"#,
+            checkpoint.db_tx_id.to_string(),
+            checkpoint.transaction_id
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(WorkerError::Unavailable)?;
+        // A count is never negative.
+        Ok(row.lag.cast_unsigned())
+    }
+
     /// One batch inside `tx`: everything but begin and commit. A separate
     /// method so a test can hold the batch open or abandon it.
     pub(crate) async fn batch_on(
@@ -124,13 +177,7 @@ impl BalanceWorker {
     ) -> Result<BatchReport, WorkerError> {
         // First, and locked: a second worker waits here until this batch
         // commits, then reads the checkpoint this one moved.
-        let checkpoint = sqlx::query!(
-            r#"SELECT db_tx_id::text::bigint AS "db_tx_id!", transaction_id
-               FROM balance_checkpoint FOR UPDATE"#
-        )
-        .fetch_one(&mut **tx)
-        .await
-        .map_err(WorkerError::Unavailable)?;
+        let checkpoint = lock_checkpoint(tx).await?;
 
         // Only below the safe line: every database transaction older than the
         // snapshot's xmin has finished, so nothing can still commit behind
@@ -177,6 +224,28 @@ impl BalanceWorker {
             transactions: u32::try_from(ids.len()).unwrap_or(u32::MAX),
         })
     }
+}
+
+/// Locks the checkpoint row and returns it. Every writer of the balance tables
+/// takes this lock first, so only one runs at a time.
+async fn lock_checkpoint(tx: &mut Transaction<'_, Postgres>) -> Result<Checkpoint, WorkerError> {
+    let row = sqlx::query!(
+        r#"SELECT db_tx_id::text::bigint AS "db_tx_id!", transaction_id
+           FROM balance_checkpoint FOR UPDATE"#
+    )
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(WorkerError::Unavailable)?;
+    Ok(Checkpoint {
+        db_tx_id: row.db_tx_id,
+        transaction_id: row.transaction_id,
+    })
+}
+
+/// Where the worker has counted up to.
+struct Checkpoint {
+    db_tx_id: i64,
+    transaction_id: i64,
 }
 
 /// The stored totals of every key `transactions` add to. A key with no

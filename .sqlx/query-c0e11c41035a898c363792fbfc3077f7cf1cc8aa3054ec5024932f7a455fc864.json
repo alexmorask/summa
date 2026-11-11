@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM tag_balances",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "c0e11c41035a898c363792fbfc3077f7cf1cc8aa3054ec5024932f7a455fc864"
+}

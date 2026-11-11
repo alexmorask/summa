@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"lag!\" FROM transactions\n               WHERE (db_tx_id, id) > ($1::text::xid8, $2)\n                 AND db_tx_id < pg_snapshot_xmin(pg_current_snapshot())",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "lag!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "0eeec4e45d25fb7f911e96d67fa3250a51bc7c9afae4b86f8b2babc285729756"
+}
