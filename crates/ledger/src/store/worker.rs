@@ -96,9 +96,13 @@ impl BalanceWorker {
         .await
         .map_err(WorkerError::Unavailable)?;
 
+        // Only below the safe line: every database transaction older than the
+        // snapshot's xmin has finished, so nothing can still commit behind
+        // the checkpoint.
         let next = sqlx::query!(
             r#"SELECT id, db_tx_id::text::bigint AS "db_tx_id!" FROM transactions
                WHERE (db_tx_id, id) > ($1::text::xid8, $2)
+                 AND db_tx_id < pg_snapshot_xmin(pg_current_snapshot())
                ORDER BY db_tx_id, id
                LIMIT $3"#,
             checkpoint.db_tx_id.to_string(),

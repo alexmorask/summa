@@ -117,6 +117,28 @@ async fn balance_row_count(pool: &PgPool) -> i64 {
     .unwrap()
 }
 
+/// Waits until the safe line has passed every committed posting in this
+/// database. The line is cluster-wide, so another test's open transaction
+/// (in its own database) holds it back too. Polling is bounded, not timed: it
+/// ends as soon as those transactions finish.
+async fn settle(pool: &PgPool) {
+    let polling = async {
+        while !sqlx::query_scalar::<_, bool>(
+            "SELECT coalesce(max(db_tx_id), '0'::xid8) \
+                    < pg_snapshot_xmin(pg_current_snapshot()) FROM transactions",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(10), polling)
+        .await
+        .expect("the safe line never passed this database's postings");
+}
+
 /// Saves `transaction` and returns its id.
 async fn save(store: &Store<TestTag>, transaction: &UnpostedTransaction<Usd, TestTag>) -> i64 {
     let id = store
@@ -188,6 +210,7 @@ async fn design_doc_batch_example(pool: PgPool) {
     }
     assert_eq!(ids, [501, 502, 503]);
 
+    settle(&pool).await;
     assert_eq!(worker(&pool, 1_000).run_batch().await.unwrap(), report(3));
 
     let deferred = totals(&pool, DEFERRED_REVENUE).await;
@@ -216,6 +239,7 @@ async fn batch_size_caps_the_batch(pool: PgPool) {
         save(&store, &base_keyed(&format!("renewal-{n}"))).await;
     }
     let worker = worker(&pool, 2);
+    settle(&pool).await;
     let mut reports = Vec::new();
     for _ in 0..4 {
         reports.push(worker.run_batch().await.unwrap());
@@ -242,6 +266,7 @@ async fn same_database_transaction_spans_a_batch_boundary(pool: PgPool) {
         .unwrap();
     assert_eq!(shared, 1, "both should share one database transaction");
 
+    settle(&pool).await;
     let worker = worker(&pool, 1);
     let mut reports = Vec::new();
     for _ in 0..3 {
@@ -268,6 +293,7 @@ async fn reversal_nets_to_zero_but_both_totals_grow(pool: PgPool) {
         .unwrap();
     store.save(&reversal).await.unwrap();
 
+    settle(&pool).await;
     assert_eq!(worker(&pool, 1_000).catch_up().await.unwrap(), 2);
     for account in [ASSET, REVENUE] {
         let (debit, credit) = totals(&pool, account).await;
@@ -279,6 +305,7 @@ async fn reversal_nets_to_zero_but_both_totals_grow(pool: PgPool) {
 #[sqlx::test]
 async fn tag_balances_follow_entry_tags(pool: PgPool) {
     save(&store(&pool), &base()).await;
+    settle(&pool).await;
     assert_eq!(worker(&pool, 1_000).run_batch().await.unwrap(), report(1));
     assert_eq!(tag_totals(&pool, ASSET, "alpha", "1").await, (100, 0));
     let beta: i64 = sqlx::query_scalar("SELECT count(*) FROM tag_balances WHERE kind = 'beta'")
@@ -301,6 +328,7 @@ async fn failed_checkpoint_update_rolls_back_the_balances(pool: PgPool) {
     .await
     .unwrap();
 
+    settle(&pool).await;
     let worker = worker(&pool, 1_000);
     let result = worker.run_batch().await;
     assert!(
@@ -322,6 +350,7 @@ async fn failed_checkpoint_update_rolls_back_the_balances(pool: PgPool) {
 #[sqlx::test]
 async fn abandoned_batch_changes_nothing(pool: PgPool) {
     save(&store(&pool), &base()).await;
+    settle(&pool).await;
     let worker = worker(&pool, 1_000);
     let mut tx = pool.begin().await.unwrap();
     assert_eq!(worker.batch_on(&mut tx).await.unwrap(), report(1));
@@ -347,6 +376,7 @@ async fn overflow_stops_with_the_transaction_named(pool: PgPool) {
     .await
     .unwrap();
 
+    settle(&pool).await;
     let result = worker(&pool, 1_000).run_batch().await;
     let Err(error @ WorkerError::Overflow { transaction }) = result else {
         panic!("expected Overflow, got {result:?}");
@@ -359,4 +389,95 @@ async fn overflow_stops_with_the_transaction_named(pool: PgPool) {
     assert_eq!(totals(&pool, ASSET).await, (i64::MAX - 50, 0));
     assert_eq!(balance_row_count(&pool).await, 1);
     assert_eq!(checkpoint(&pool).await, (0, 0));
+}
+
+/// Records the base accounts up front. Otherwise a held-open first use of
+/// them makes a later save wait on its uncommitted `recorded_accounts` row.
+async fn record_base_accounts(pool: &PgPool) {
+    sqlx::query(
+        "INSERT INTO recorded_accounts (number, account_type, contra) VALUES \
+         ($1, 'asset', false), ($2, 'revenue', false)",
+    )
+    .bind(i64::from(ASSET.get()))
+    .bind(i64::from(REVENUE.get()))
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// Inserts `transaction` in a database transaction that stays open, and
+/// returns it with the ledger transaction's id.
+async fn hold_open(
+    pool: &PgPool,
+    store: &Store<TestTag>,
+    transaction: &UnpostedTransaction<Usd, TestTag>,
+) -> (sqlx::Transaction<'static, sqlx::Postgres>, i64) {
+    let mut tx = pool.begin().await.unwrap();
+    let Attempt::Inserted(posted) = store
+        .insert_on(&mut tx, transaction, clock_time())
+        .await
+        .unwrap()
+    else {
+        panic!("the held posting should have inserted");
+    };
+    (tx, i64::try_from(posted.id().get()).unwrap())
+}
+
+#[sqlx::test]
+async fn later_posting_finishing_first_is_not_skipped(pool: PgPool) {
+    record_base_accounts(&pool).await;
+    let store = store(&pool);
+    let (tx_a, a) = hold_open(&pool, &store, &base_keyed("renewal-a")).await;
+    let b = save(&store, &base_keyed("renewal-b")).await;
+    assert!(a < b, "A started first, so it has the lower id");
+
+    let worker = worker(&pool, 1_000);
+    assert_eq!(worker.run_batch().await.unwrap(), report(0));
+    assert_eq!(balance_row_count(&pool).await, 0);
+
+    tx_a.commit().await.unwrap();
+    settle(&pool).await;
+    assert_eq!(worker.catch_up().await.unwrap(), 2);
+    assert_eq!(totals(&pool, ASSET).await, (200, 0));
+    assert_eq!(totals(&pool, REVENUE).await, (0, 200));
+    assert_eq!(tag_totals(&pool, ASSET, "alpha", "1").await, (200, 0));
+    assert_eq!(checkpoint(&pool).await, (db_tx_id_of(&pool, b).await, b));
+}
+
+#[sqlx::test]
+async fn rolled_back_posting_does_not_stall_the_worker(pool: PgPool) {
+    record_base_accounts(&pool).await;
+    let store = store(&pool);
+    let (tx_a, a) = hold_open(&pool, &store, &base_keyed("renewal-a")).await;
+    let b = save(&store, &base_keyed("renewal-b")).await;
+    tx_a.rollback().await.unwrap();
+
+    settle(&pool).await;
+    assert_eq!(worker(&pool, 1_000).run_batch().await.unwrap(), report(1));
+    let gap: i64 = sqlx::query_scalar("SELECT count(*) FROM transactions WHERE id = $1")
+        .bind(a)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(gap, 0, "A's id stays a permanent gap");
+    assert_eq!(totals(&pool, ASSET).await, (100, 0));
+    assert_eq!(checkpoint(&pool).await, (db_tx_id_of(&pool, b).await, b));
+}
+
+#[sqlx::test]
+async fn open_transaction_elsewhere_only_delays_the_worker(pool: PgPool) {
+    let mut elsewhere = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_current_xact_id()")
+        .execute(&mut *elsewhere)
+        .await
+        .unwrap();
+    save(&store(&pool), &base()).await;
+
+    let worker = worker(&pool, 1_000);
+    assert_eq!(worker.run_batch().await.unwrap(), report(0));
+
+    elsewhere.rollback().await.unwrap();
+    settle(&pool).await;
+    assert_eq!(worker.run_batch().await.unwrap(), report(1));
+    assert_eq!(totals(&pool, ASSET).await, (100, 0));
 }

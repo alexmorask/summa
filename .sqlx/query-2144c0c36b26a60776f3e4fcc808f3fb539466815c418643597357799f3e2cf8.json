@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, db_tx_id::text::bigint AS \"db_tx_id!\" FROM transactions\n               WHERE (db_tx_id, id) > ($1::text::xid8, $2)\n               ORDER BY db_tx_id, id\n               LIMIT $3",
+  "query": "SELECT id, db_tx_id::text::bigint AS \"db_tx_id!\" FROM transactions\n               WHERE (db_tx_id, id) > ($1::text::xid8, $2)\n                 AND db_tx_id < pg_snapshot_xmin(pg_current_snapshot())\n               ORDER BY db_tx_id, id\n               LIMIT $3",
   "describe": {
     "columns": [
       {
@@ -33,5 +33,5 @@
       null
     ]
   },
-  "hash": "4d67fc5a82565445858cff6c55369f088ff54ddc590148688301a3ddfb3bef73"
+  "hash": "2144c0c36b26a60776f3e4fcc808f3fb539466815c418643597357799f3e2cf8"
 }
