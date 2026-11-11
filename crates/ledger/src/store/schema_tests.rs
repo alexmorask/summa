@@ -442,3 +442,88 @@ async fn rejects_recorded_account_number_out_of_range(pool: PgPool) {
     let result = record_account(&pool, -1, "asset", false).await;
     assert_eq!(violated(result), "recorded_accounts_number_range");
 }
+
+#[sqlx::test]
+async fn checkpoint_starts_at_the_beginning_of_the_log(pool: PgPool) {
+    let rows: Vec<(String, i64)> =
+        sqlx::query_as("SELECT db_tx_id::text, transaction_id FROM balance_checkpoint")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(rows, vec![("0".to_owned(), 0)]);
+}
+
+#[sqlx::test]
+async fn checkpoint_table_holds_one_row(pool: PgPool) {
+    let result = sqlx::query(
+        "INSERT INTO balance_checkpoint (only_row, db_tx_id, transaction_id) \
+         VALUES (false, '0'::xid8, 0)",
+    )
+    .execute(&pool)
+    .await
+    .map(|_| ());
+    assert!(result.is_err());
+    let result = sqlx::query(
+        "INSERT INTO balance_checkpoint (only_row, db_tx_id, transaction_id) \
+         VALUES (true, '0'::xid8, 0)",
+    )
+    .execute(&pool)
+    .await
+    .map(|_| ());
+    assert!(result.is_err());
+}
+
+/// Inserts an account balance row with the given totals.
+async fn insert_account_balance(
+    executor: impl PgExecutor<'_>,
+    account: i64,
+    debit_total: i64,
+    credit_total: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO account_balances (account, debit_total, credit_total) VALUES ($1, $2, $3)",
+    )
+    .bind(account)
+    .bind(debit_total)
+    .bind(credit_total)
+    .execute(executor)
+    .await
+    .map(|_| ())
+}
+
+#[sqlx::test]
+async fn balance_totals_cannot_be_negative(pool: PgPool) {
+    record_account(&pool, 1000, "asset", false).await.unwrap();
+    let result = insert_account_balance(&pool, 1000, -1, 0).await;
+    assert_eq!(violated(result), "account_balances_totals_non_negative");
+}
+
+#[sqlx::test]
+async fn tag_balance_totals_cannot_be_negative(pool: PgPool) {
+    record_account(&pool, 1000, "asset", false).await.unwrap();
+    let result = sqlx::query(
+        "INSERT INTO tag_balances (account, kind, value, debit_total, credit_total) \
+         VALUES (1000, 'k', 'v', 0, -1)",
+    )
+    .execute(&pool)
+    .await
+    .map(|_| ());
+    assert_eq!(violated(result), "tag_balances_totals_non_negative");
+}
+
+#[sqlx::test]
+async fn balances_need_a_recorded_account(pool: PgPool) {
+    let result = insert_account_balance(&pool, 1000, 0, 0).await;
+    assert_eq!(violated(result), "account_balances_account_fkey");
+}
+
+#[sqlx::test]
+async fn balances_can_be_deleted(pool: PgPool) {
+    record_account(&pool, 1000, "asset", false).await.unwrap();
+    insert_account_balance(&pool, 1000, 5, 0).await.unwrap();
+    let deleted = sqlx::query("DELETE FROM account_balances WHERE account = 1000")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(deleted.rows_affected(), 1);
+}
