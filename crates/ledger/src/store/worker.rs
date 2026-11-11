@@ -83,6 +83,39 @@ impl BalanceWorker {
         }
     }
 
+    /// Runs batches until `should_stop` says so. A full batch goes again at
+    /// once; a smaller one waits `idle_wait`. A retryable error waits
+    /// `retry_wait`, doubling each time, and retries up to `retries` failures in
+    /// a row (any success resets the count). A permanent error, or running out
+    /// of retries, returns the error. All waiting goes through `pause`.
+    pub async fn run(
+        &self,
+        should_stop: impl Fn() -> bool,
+        pause: impl AsyncFn(Duration),
+    ) -> Result<(), WorkerError> {
+        let mut failures = 0_u32;
+        while !should_stop() {
+            match self.run_batch().await {
+                Ok(report) => {
+                    failures = 0;
+                    if report.transactions < self.config.batch_size.get() {
+                        pause(self.config.idle_wait).await;
+                    }
+                }
+                Err(error) if error.is_retryable() && failures < self.config.retries => {
+                    let wait = self
+                        .config
+                        .retry_wait
+                        .saturating_mul(2_u32.saturating_pow(failures));
+                    failures += 1;
+                    pause(wait).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+
     /// One batch inside `tx`: everything but begin and commit. A separate
     /// method so a test can hold the batch open or abandon it.
     pub(crate) async fn batch_on(

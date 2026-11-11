@@ -224,7 +224,6 @@ pub enum WorkerError {
 impl WorkerError {
     /// Whether running the batch again might succeed. True only for
     /// [`Unavailable`](Self::Unavailable); every other error repeats.
-    #[allow(dead_code, reason = "used by the worker loop in a later task")]
     pub fn is_retryable(&self) -> bool {
         matches!(self, WorkerError::Unavailable(_))
     }

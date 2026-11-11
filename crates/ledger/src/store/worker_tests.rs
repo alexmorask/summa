@@ -1,6 +1,9 @@
 //! The balance worker against a real database, one fresh database per test.
 
+use std::cell::Cell;
 use std::num::NonZeroU32;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use sqlx::PgPool;
 
@@ -366,17 +369,24 @@ async fn abandoned_batch_changes_nothing(pool: PgPool) {
     assert_eq!(totals(&pool, REVENUE).await, (0, 100));
 }
 
-#[sqlx::test]
-async fn overflow_stops_with_the_transaction_named(pool: PgPool) {
-    let id = save(&store(&pool), &base()).await;
+/// Saves the base transaction and stores an `ASSET` total so close to the
+/// limit that counting it would overflow. Returns the transaction's id.
+async fn overflowing_setup(pool: &PgPool) -> i64 {
+    let id = save(&store(pool), &base()).await;
     sqlx::query(
         "INSERT INTO account_balances (account, debit_total, credit_total) VALUES ($1, $2, 0)",
     )
     .bind(i64::from(ASSET.get()))
     .bind(i64::MAX - 50)
-    .execute(&pool)
+    .execute(pool)
     .await
     .unwrap();
+    id
+}
+
+#[sqlx::test]
+async fn overflow_stops_with_the_transaction_named(pool: PgPool) {
+    let id = overflowing_setup(&pool).await;
 
     settle(&pool).await;
     let result = worker(&pool, 1_000).run_batch().await;
@@ -542,4 +552,93 @@ async fn batch_started_while_another_commits_counts_once(pool: PgPool) {
     assert_eq!(totals(&pool, ASSET).await, (200, 0));
     assert_eq!(totals(&pool, REVENUE).await, (0, 200));
     assert_eq!(tag_totals(&pool, ASSET, "alpha", "1").await, (200, 0));
+}
+
+/// A `pause` that records each wait instead of sleeping, and the waits so far.
+fn recording_pause() -> (impl AsyncFn(Duration), Arc<Mutex<Vec<Duration>>>) {
+    let waits = Arc::new(Mutex::new(Vec::new()));
+    let log = Arc::clone(&waits);
+    let pause = async move |wait: Duration| log.lock().unwrap().push(wait);
+    (pause, waits)
+}
+
+/// A `should_stop` that is false for the first `calls - 1` calls and true from
+/// call number `calls` on.
+fn stop_on_call(calls: usize) -> impl Fn() -> bool {
+    let seen = Cell::new(0_usize);
+    move || {
+        seen.set(seen.get() + 1);
+        seen.get() >= calls
+    }
+}
+
+fn waits_of(waits: &Arc<Mutex<Vec<Duration>>>) -> Vec<Duration> {
+    waits.lock().unwrap().clone()
+}
+
+#[sqlx::test]
+async fn idle_loop_waits_then_stops(pool: PgPool) {
+    let worker = worker(&pool, 1_000);
+    let (pause, waits) = recording_pause();
+    worker.run(stop_on_call(3), pause).await.unwrap();
+    let idle = WorkerConfig::default().idle_wait;
+    assert_eq!(waits_of(&waits), [idle, idle]);
+}
+
+#[sqlx::test]
+async fn full_batch_goes_again_without_waiting(pool: PgPool) {
+    let store = store(&pool);
+    for key_text in ["renewal-1", "renewal-2"] {
+        save(&store, &base_keyed(key_text)).await;
+    }
+    settle(&pool).await;
+
+    let worker = worker(&pool, 2);
+    let (pause, waits) = recording_pause();
+    worker.run(stop_on_call(3), pause).await.unwrap();
+    assert_eq!(waits_of(&waits), [WorkerConfig::default().idle_wait]);
+    assert_eq!(totals(&pool, ASSET).await, (200, 0));
+    assert_eq!(totals(&pool, REVENUE).await, (0, 200));
+}
+
+#[sqlx::test]
+async fn transient_errors_retry_with_growing_waits_then_stop(pool: PgPool) {
+    let worker = BalanceWorker::new(
+        pool.clone(),
+        WorkerConfig {
+            retries: 3,
+            retry_wait: Duration::from_millis(10),
+            ..WorkerConfig::default()
+        },
+    );
+    pool.close().await;
+    let (pause, waits) = recording_pause();
+    let result = worker.run(|| false, pause).await;
+    assert!(
+        matches!(result, Err(WorkerError::Unavailable(_))),
+        "expected Unavailable, got {result:?}"
+    );
+    assert_eq!(
+        waits_of(&waits),
+        [
+            Duration::from_millis(10),
+            Duration::from_millis(20),
+            Duration::from_millis(40)
+        ]
+    );
+}
+
+#[sqlx::test]
+async fn permanent_error_stops_without_retrying(pool: PgPool) {
+    let id = overflowing_setup(&pool).await;
+    settle(&pool).await;
+
+    let (pause, waits) = recording_pause();
+    let result = worker(&pool, 1_000).run(|| false, pause).await;
+    let Err(WorkerError::Overflow { transaction }) = result else {
+        panic!("expected Overflow, got {result:?}");
+    };
+    assert_eq!(transaction, id);
+    assert!(waits_of(&waits).is_empty());
+    assert_eq!(checkpoint(&pool).await, (0, 0));
 }
