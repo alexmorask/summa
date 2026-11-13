@@ -127,7 +127,8 @@ impl BalanceWorker {
     /// batch, so it waits for a running batch and no batch sees a half-reset.
     /// The reset commits an empty state, and a missing row reads as zero, so
     /// until the log is replayed (see [`rebuild`](Self::rebuild)) stored
-    /// balances read as zero or less than the log holds.
+    /// totals start from zero and net balances can read above or below the
+    /// log's.
     pub async fn reset(&self) -> Result<(), WorkerError> {
         let mut tx = self.pool.begin().await.map_err(unbatched)?;
         self.reset_on(&mut tx).await?;
@@ -159,8 +160,9 @@ impl BalanceWorker {
     /// back are left for later and counted by [`lag`](Self::lag). Returns how
     /// many ledger transactions it counted. The reset commits before the
     /// replay, so during a rebuild stored balances are correct as of the
-    /// checkpoint: they fall to zero and rise as the replay catches up. Reads
-    /// are unreliable until the rebuild finishes.
+    /// checkpoint: totals start from zero, and a net balance can read above or
+    /// below its final value mid-replay. Reads are unreliable until the
+    /// rebuild finishes.
     pub async fn rebuild(&self) -> Result<u64, WorkerError> {
         self.reset().await?;
         self.catch_up().await

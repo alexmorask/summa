@@ -17,7 +17,8 @@ impl<T: StoredTag> Store<T> {
     /// It can lag behind the log (see `BalanceWorker::lag`), so never use it
     /// to decide whether a spend is allowed. A stopped or held-back worker
     /// leaves values stale, and during a rebuild reads are unreliable until
-    /// it finishes: balances fall to zero and rise as the replay catches up.
+    /// it finishes: a net balance can read above or below its final value
+    /// mid-replay.
     pub async fn stored_balance(
         &self,
         account: AccountNumber,
