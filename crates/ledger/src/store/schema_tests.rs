@@ -462,7 +462,7 @@ async fn checkpoint_table_holds_one_row(pool: PgPool) {
     .execute(&pool)
     .await
     .map(|_| ());
-    assert!(result.is_err());
+    assert_eq!(violated(result), "balance_checkpoint_only_row");
     let result = sqlx::query(
         "INSERT INTO balance_checkpoint (only_row, db_tx_id, transaction_id) \
          VALUES (true, '0'::xid8, 0)",
@@ -470,7 +470,7 @@ async fn checkpoint_table_holds_one_row(pool: PgPool) {
     .execute(&pool)
     .await
     .map(|_| ());
-    assert!(result.is_err());
+    assert_eq!(violated(result), "balance_checkpoint_pkey");
 }
 
 /// Inserts an account balance row with the given totals.
@@ -515,6 +515,42 @@ async fn tag_balance_totals_cannot_be_negative(pool: PgPool) {
 async fn balances_need_a_recorded_account(pool: PgPool) {
     let result = insert_account_balance(&pool, 1000, 0, 0).await;
     assert_eq!(violated(result), "account_balances_account_fkey");
+}
+
+#[sqlx::test]
+async fn tag_balances_need_a_recorded_account(pool: PgPool) {
+    let result = sqlx::query(
+        "INSERT INTO tag_balances (account, kind, value, debit_total, credit_total) \
+         VALUES (1000, 'k', 'v', 0, 0)",
+    )
+    .execute(&pool)
+    .await
+    .map(|_| ());
+    assert_eq!(violated(result), "tag_balances_account_fkey");
+}
+
+#[sqlx::test]
+async fn balance_tables_accept_updates(pool: PgPool) {
+    record_account(&pool, 1000, "asset", false).await.unwrap();
+    insert_account_balance(&pool, 1000, 5, 0).await.unwrap();
+    sqlx::query(
+        "INSERT INTO tag_balances (account, kind, value, debit_total, credit_total) \
+         VALUES (1000, 'k', 'v', 5, 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    for (table, set) in [
+        ("account_balances", "debit_total = 6"),
+        ("tag_balances", "debit_total = 6"),
+        ("balance_checkpoint", "transaction_id = 1"),
+    ] {
+        let updated = sqlx::query(AssertSqlSafe(format!("UPDATE {table} SET {set}")))
+            .execute(&pool)
+            .await
+            .unwrap_or_else(|error| panic!("{table}: {error}"));
+        assert_eq!(updated.rows_affected(), 1, "{table}");
+    }
 }
 
 #[sqlx::test]

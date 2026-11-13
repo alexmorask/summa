@@ -262,6 +262,44 @@ mod tests {
     }
 
     #[test]
+    fn overflow_on_the_credit_side_names_the_transaction() {
+        let stored = [(BalanceKey::Account(acct(2)), totals(0, i64::MAX - 5))];
+        let transaction = LogTransaction {
+            id: 8,
+            entries: vec![entry(1, Side::Debit, 10), entry(2, Side::Credit, 10)],
+        };
+        assert_eq!(
+            net(stored, &[transaction]),
+            Err(NettingOverflow { transaction: 8 })
+        );
+    }
+
+    #[test]
+    fn overflow_on_a_tag_total_names_the_transaction() {
+        let tag = || ("k".to_string(), "v".to_string());
+        let (kind, value) = tag();
+        let stored = [(
+            BalanceKey::Tag(acct(1), kind, value),
+            totals(i64::MAX - 5, 0),
+        )];
+        // The account total starts at zero and fits; only the tag total overflows.
+        let transaction = LogTransaction {
+            id: 9,
+            entries: vec![
+                LogEntry {
+                    tags: vec![tag()],
+                    ..entry(1, Side::Debit, 10)
+                },
+                entry(2, Side::Credit, 10),
+            ],
+        };
+        assert_eq!(
+            net(stored, &[transaction]),
+            Err(NettingOverflow { transaction: 9 })
+        );
+    }
+
+    #[test]
     fn overflow_after_earlier_transactions_returns_only_the_error() {
         let stored = [(BalanceKey::Account(acct(1)), totals(i64::MAX - 15, 0))];
         let batch = [
