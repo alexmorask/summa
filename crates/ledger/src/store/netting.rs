@@ -3,6 +3,7 @@
 //! account and of each of its tags, so the database is written once per
 //! changed total instead of once per entry.
 
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
 use crate::account::{AccountNumber, Side};
@@ -57,47 +58,45 @@ pub(crate) struct NettingOverflow {
     pub(crate) transaction: i64,
 }
 
-/// Stored totals for the keys a batch touches, updated as the batch is applied.
-pub(crate) struct Netting {
-    /// Each total, and whether the batch has changed it.
-    totals: HashMap<BalanceKey, (Totals, bool)>,
+/// Every key the batch's entries add to.
+pub(crate) fn keys_for(transactions: &[LogTransaction]) -> HashSet<BalanceKey> {
+    transactions
+        .iter()
+        .flat_map(|t| &t.entries)
+        .flat_map(entry_keys)
+        .collect()
 }
 
-impl Netting {
-    /// Every key the batch's entries add to.
-    pub(crate) fn keys_for(transactions: &[LogTransaction]) -> HashSet<BalanceKey> {
-        let mut keys = HashSet::new();
-        for entry in transactions.iter().flat_map(|t| &t.entries) {
-            keys.extend(Self::entry_keys(entry));
-        }
-        keys
-    }
+/// The account key of `entry`, then one key per tag.
+fn entry_keys(entry: &LogEntry) -> impl Iterator<Item = BalanceKey> + '_ {
+    std::iter::once(BalanceKey::Account(entry.account)).chain(
+        entry
+            .tags
+            .iter()
+            .map(|(kind, value)| BalanceKey::Tag(entry.account, kind.clone(), value.clone())),
+    )
+}
 
-    fn entry_keys(entry: &LogEntry) -> impl Iterator<Item = BalanceKey> + '_ {
-        std::iter::once(BalanceKey::Account(entry.account)).chain(
-            entry
-                .tags
-                .iter()
-                .map(|(kind, value)| BalanceKey::Tag(entry.account, kind.clone(), value.clone())),
-        )
-    }
-
-    /// Starts from the stored totals. A key not given starts at zero.
-    pub(crate) fn new(stored: impl IntoIterator<Item = (BalanceKey, Totals)>) -> Self {
-        Self {
-            totals: stored
-                .into_iter()
-                .map(|(key, totals)| (key, (totals, false)))
-                .collect(),
-        }
-    }
-
-    /// Adds every entry of `transaction`. On overflow the value is unusable
-    /// and the caller abandons the batch.
-    pub(crate) fn apply(&mut self, transaction: &LogTransaction) -> Result<(), NettingOverflow> {
+/// Adds every entry of `transactions`, in order, to the `stored` totals and
+/// returns only the keys the batch touched, with their new totals. A key
+/// missing from `stored` starts at zero. If a total would overflow, it
+/// returns only the error, naming the first transaction that overflows.
+pub(crate) fn net(
+    stored: impl IntoIterator<Item = (BalanceKey, Totals)>,
+    transactions: &[LogTransaction],
+) -> Result<Vec<(BalanceKey, Totals)>, NettingOverflow> {
+    let mut stored: HashMap<BalanceKey, Totals> = stored.into_iter().collect();
+    let mut touched: HashMap<BalanceKey, Totals> = HashMap::new();
+    for transaction in transactions {
         for entry in &transaction.entries {
-            for key in Self::entry_keys(entry) {
-                let (totals, touched) = self.totals.entry(key).or_insert((Totals::ZERO, false));
+            for key in entry_keys(entry) {
+                let totals = match touched.entry(key) {
+                    Entry::Occupied(occupied) => occupied.into_mut(),
+                    Entry::Vacant(vacant) => {
+                        let start = stored.remove(vacant.key()).unwrap_or(Totals::ZERO);
+                        vacant.insert(start)
+                    }
+                };
                 let side = match entry.side {
                     Side::Debit => &mut totals.debit,
                     Side::Credit => &mut totals.credit,
@@ -107,20 +106,10 @@ impl Netting {
                     .map_err(|MoneyError::Overflow| NettingOverflow {
                         transaction: transaction.id,
                     })?;
-                *touched = true;
             }
         }
-        Ok(())
     }
-
-    /// The touched keys with their new totals.
-    pub(crate) fn updates(self) -> Vec<(BalanceKey, Totals)> {
-        self.totals
-            .into_iter()
-            .filter(|(_, (_, touched))| *touched)
-            .map(|(key, (totals, _))| (key, totals))
-            .collect()
-    }
+    Ok(touched.into_iter().collect())
 }
 
 #[cfg(test)]
@@ -153,18 +142,28 @@ mod tests {
         }
     }
 
-    fn updates_map(netting: Netting) -> HashMap<BalanceKey, Totals> {
-        netting.updates().into_iter().collect()
+    fn net_map(
+        stored: impl IntoIterator<Item = (BalanceKey, Totals)>,
+        transactions: &[LogTransaction],
+    ) -> HashMap<BalanceKey, Totals> {
+        net(stored, transactions).unwrap().into_iter().collect()
     }
 
+    // Stored before the batch, in cents (debit, credit): 2000 (0, 500,000),
+    // 4000 (0, 100,000), 1010 (30,000, 0), 2100 (0, 5,000).
+    // 501: debit 2000 2,000, credit 4000 2,000.
+    // 502: debit 2000 1,000, credit 4000 1,000.
+    // 503: debit 1010 2,160, credit 2000 2,000, credit 2100 160.
+    // After: 2000 (3,000, 502,000) nets to a 499,000 credit; 4000 (0, 103,000);
+    // 1010 (32,160, 0); 2100 (0, 5,160). Seven entries, four changed totals.
     #[test]
-    fn design_doc_batch_nets_to_four_changes() {
-        let mut netting = Netting::new([
+    fn batch_of_three_transactions_nets_to_four_changes() {
+        let stored = [
             (BalanceKey::Account(acct(2000)), totals(0, 500_000)),
             (BalanceKey::Account(acct(4000)), totals(0, 100_000)),
             (BalanceKey::Account(acct(1010)), totals(30_000, 0)),
             (BalanceKey::Account(acct(2100)), totals(0, 5_000)),
-        ]);
+        ];
         let batch = [
             LogTransaction {
                 id: 501,
@@ -189,10 +188,7 @@ mod tests {
                 ],
             },
         ];
-        for transaction in &batch {
-            netting.apply(transaction).unwrap();
-        }
-        let updates = updates_map(netting);
+        let updates = net_map(stored, &batch);
         assert_eq!(updates.len(), 4);
         let liability = updates[&BalanceKey::Account(acct(2000))];
         assert_eq!(liability, totals(3_000, 502_000));
@@ -207,13 +203,11 @@ mod tests {
 
     #[test]
     fn same_account_on_both_sides_grows_both_totals() {
-        let mut netting = Netting::new([]);
         let transaction = LogTransaction {
             id: 1,
             entries: vec![entry(1, Side::Debit, 500), entry(1, Side::Credit, 500)],
         };
-        netting.apply(&transaction).unwrap();
-        let updates = updates_map(netting);
+        let updates = net_map([], &[transaction]);
         let account = updates[&BalanceKey::Account(acct(1))];
         assert_eq!(account, totals(500, 500));
         assert_eq!(account.net(Side::Debit), Ok(usd(0)));
@@ -229,9 +223,7 @@ mod tests {
             id: 1,
             entries: vec![tagged("a:b"), tagged(""), tagged("é"), tagged("é")],
         };
-        let mut netting = Netting::new([]);
-        netting.apply(&batch).unwrap();
-        let updates = updates_map(netting);
+        let updates = net_map([], &[batch]);
         let tag_key = |value: &str| BalanceKey::Tag(acct(1), "k".to_string(), value.to_string());
         assert_eq!(updates.len(), 4);
         assert_eq!(updates[&tag_key("a:b")], totals(10, 0));
@@ -242,15 +234,13 @@ mod tests {
 
     #[test]
     fn untagged_entries_add_only_to_the_account_balance() {
-        let mut netting = Netting::new([]);
         let transaction = LogTransaction {
             id: 1,
             entries: vec![entry(1, Side::Debit, 5), entry(2, Side::Credit, 5)],
         };
-        netting.apply(&transaction).unwrap();
         assert!(
-            netting
-                .updates()
+            net([], &[transaction])
+                .unwrap()
                 .iter()
                 .all(|(key, _)| matches!(key, BalanceKey::Account(_)))
         );
@@ -258,35 +248,44 @@ mod tests {
 
     #[test]
     fn overflow_names_the_transaction() {
-        let mut netting = Netting::new([(
-            BalanceKey::Account(acct(1)),
-            Totals {
-                debit: usd(i64::MAX - 5),
-                credit: usd(0),
-            },
-        )]);
+        let stored = [(BalanceKey::Account(acct(1)), totals(i64::MAX - 5, 0))];
         let transaction = LogTransaction {
             id: 7,
             entries: vec![entry(1, Side::Debit, 10)],
         };
         assert_eq!(
-            netting.apply(&transaction),
+            net(stored, &[transaction]),
             Err(NettingOverflow { transaction: 7 })
         );
     }
 
     #[test]
+    fn overflow_after_earlier_transactions_returns_only_the_error() {
+        let stored = [(BalanceKey::Account(acct(1)), totals(i64::MAX - 15, 0))];
+        let batch = [
+            LogTransaction {
+                id: 6,
+                entries: vec![entry(1, Side::Debit, 10), entry(2, Side::Credit, 10)],
+            },
+            LogTransaction {
+                id: 7,
+                entries: vec![entry(1, Side::Debit, 10), entry(2, Side::Credit, 10)],
+            },
+        ];
+        assert_eq!(net(stored, &batch), Err(NettingOverflow { transaction: 7 }));
+    }
+
+    #[test]
     fn updates_hold_only_touched_keys() {
-        let mut netting = Netting::new([
+        let stored = [
             (BalanceKey::Account(acct(1)), totals(1, 0)),
             (BalanceKey::Account(acct(9)), totals(9, 9)),
-        ]);
+        ];
         let transaction = LogTransaction {
             id: 1,
             entries: vec![entry(1, Side::Debit, 1)],
         };
-        netting.apply(&transaction).unwrap();
-        let updates = updates_map(netting);
+        let updates = net_map(stored, &[transaction]);
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[&BalanceKey::Account(acct(1))], totals(2, 0));
     }
@@ -301,7 +300,7 @@ mod tests {
             }],
         }];
         assert_eq!(
-            Netting::keys_for(&batch),
+            keys_for(&batch),
             HashSet::from([
                 BalanceKey::Account(acct(1)),
                 BalanceKey::Tag(acct(1), "k".to_string(), "v".to_string()),
@@ -322,9 +321,9 @@ mod tests {
             transactions in posted_transactions(),
             tag in prop::option::of(any_test_tag()),
         ) {
-            let mut netting = Netting::new([]);
-            for transaction in &transactions {
-                let log = LogTransaction {
+            let log: Vec<LogTransaction> = transactions
+                .iter()
+                .map(|transaction| LogTransaction {
                     id: transaction.id().get() as i64,
                     entries: transaction
                         .entries()
@@ -340,10 +339,9 @@ mod tests {
                                 .collect(),
                         })
                         .collect(),
-                };
-                netting.apply(&log).unwrap();
-            }
-            let updates = updates_map(netting);
+                })
+                .collect();
+            let updates = net_map([], &log);
             for number in 1..=4 {
                 let account = acct(number);
                 let normal = chart().get(account).unwrap().normal_side();

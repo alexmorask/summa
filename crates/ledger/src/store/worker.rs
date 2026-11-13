@@ -10,7 +10,9 @@ use std::time::Duration;
 use sqlx::{PgPool, Postgres, Transaction};
 
 use super::error::WorkerError;
-use super::netting::{BalanceKey, LogEntry, LogTransaction, Netting, NettingOverflow, Totals};
+use super::netting::{
+    BalanceKey, LogEntry, LogTransaction, NettingOverflow, Totals, keys_for, net,
+};
 use super::rows::{CorruptData, EntryRow, TagRow, parse_entry};
 use crate::money::Money;
 
@@ -210,13 +212,10 @@ impl BalanceWorker {
 
         let transactions = load_log(tx, &ids, batch).await?;
 
-        let mut netting = Netting::new(stored_totals(tx, &transactions).await.map_err(batched)?);
-        for transaction in &transactions {
-            netting
-                .apply(transaction)
-                .map_err(|NettingOverflow { transaction }| WorkerError::Overflow { transaction })?;
-        }
-        write_totals(tx, netting.updates()).await.map_err(batched)?;
+        let stored = stored_totals(tx, &transactions).await.map_err(batched)?;
+        let updates = net(stored, &transactions)
+            .map_err(|NettingOverflow { transaction }| WorkerError::Overflow { transaction })?;
+        write_totals(tx, updates).await.map_err(batched)?;
 
         sqlx::query!(
             "UPDATE balance_checkpoint SET db_tx_id = $1::text::xid8, transaction_id = $2",
@@ -266,7 +265,7 @@ async fn stored_totals(
     tx: &mut Transaction<'_, Postgres>,
     transactions: &[LogTransaction],
 ) -> Result<Vec<(BalanceKey, Totals)>, sqlx::Error> {
-    let keys = Netting::keys_for(transactions);
+    let keys = keys_for(transactions);
     let mut accounts = Vec::new();
     let (mut tag_accounts, mut kinds, mut values) = (Vec::new(), Vec::new(), Vec::new());
     for key in &keys {
