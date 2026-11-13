@@ -409,23 +409,36 @@ async fn tag_balances_follow_entry_tags(pool: PgPool) {
     assert_eq!(beta, 0);
 }
 
-/// Makes every checkpoint update raise an exception (SQLSTATE `P0001`).
-async fn fail_checkpoint_updates(pool: &PgPool) {
-    sqlx::raw_sql(
-        "CREATE FUNCTION fail_checkpoint() RETURNS trigger LANGUAGE plpgsql AS \
-         $$ BEGIN RAISE EXCEPTION 'injected checkpoint failure'; END $$; \
+/// A raised exception: permanent.
+const RAISED: &str = "P0001";
+/// A serialization failure: transient.
+const SERIALIZATION_FAILURE: &str = "40001";
+
+/// Makes every checkpoint update raise an exception with SQLSTATE `code`.
+async fn fail_checkpoint_updates(pool: &PgPool, code: &str) {
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "CREATE OR REPLACE FUNCTION fail_checkpoint() RETURNS trigger LANGUAGE plpgsql AS \
+         $$ BEGIN RAISE EXCEPTION 'injected checkpoint failure' USING ERRCODE = '{code}'; END $$; \
          CREATE TRIGGER fail_checkpoint BEFORE UPDATE ON balance_checkpoint \
-         FOR EACH ROW EXECUTE FUNCTION fail_checkpoint();",
-    )
+         FOR EACH ROW EXECUTE FUNCTION fail_checkpoint();"
+    )))
     .execute(pool)
     .await
     .unwrap();
 }
 
+/// Undoes `fail_checkpoint_updates`.
+async fn allow_checkpoint_updates(pool: &PgPool) {
+    sqlx::query("DROP TRIGGER fail_checkpoint ON balance_checkpoint")
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
 #[sqlx::test]
 async fn failed_checkpoint_update_rolls_back_the_balances(pool: PgPool) {
     let id = save(&store(&pool), &base()).await;
-    fail_checkpoint_updates(&pool).await;
+    fail_checkpoint_updates(&pool, RAISED).await;
 
     settle(&pool).await;
     let worker = worker(&pool, 1_000);
@@ -444,10 +457,7 @@ async fn failed_checkpoint_update_rolls_back_the_balances(pool: PgPool) {
     assert_eq!(balance_row_count(&pool).await, 0);
     assert_eq!(checkpoint(&pool).await, (0, 0));
 
-    sqlx::query("DROP TRIGGER fail_checkpoint ON balance_checkpoint")
-        .execute(&pool)
-        .await
-        .unwrap();
+    allow_checkpoint_updates(&pool).await;
     assert_eq!(worker.run_batch().await.unwrap(), report(1));
     assert_base_counted(&pool, 1).await;
 }
@@ -853,6 +863,88 @@ async fn transient_errors_retry_with_growing_waits_then_stop(pool: PgPool) {
     );
 }
 
+/// A worker that retries after 10 ms, so a retry wait differs from the idle
+/// wait.
+fn retrying_worker(pool: &PgPool) -> BalanceWorker {
+    BalanceWorker::new(
+        pool.clone(),
+        WorkerConfig {
+            retry_wait: Duration::from_millis(10),
+            ..WorkerConfig::default()
+        },
+    )
+}
+
+#[sqlx::test]
+async fn transient_failure_then_recovery_makes_progress(pool: PgPool) {
+    let id = save(&store(&pool), &base()).await;
+    fail_checkpoint_updates(&pool, SERIALIZATION_FAILURE).await;
+    settle(&pool).await;
+
+    let waits = Mutex::new(Vec::new());
+    // The failure goes away during the first wait.
+    let pause = async |wait: Duration| {
+        let calls = {
+            let mut waits = waits.lock().unwrap();
+            waits.push(wait);
+            waits.len()
+        };
+        if calls == 1 {
+            allow_checkpoint_updates(&pool).await;
+        }
+    };
+    let worker = retrying_worker(&pool);
+    worker.run(stop_on_call(3), pause).await.unwrap();
+
+    let config = WorkerConfig::default();
+    assert_eq!(
+        *waits.lock().unwrap(),
+        [Duration::from_millis(10), config.idle_wait]
+    );
+    assert_base_counted(&pool, 1).await;
+    assert_checkpoint_at(&pool, id).await;
+}
+
+#[sqlx::test]
+async fn success_resets_the_retry_count(pool: PgPool) {
+    let store = store(&pool);
+    save(&store, &base_keyed("renewal-1")).await;
+    fail_checkpoint_updates(&pool, SERIALIZATION_FAILURE).await;
+    settle(&pool).await;
+
+    let waits = Mutex::new(Vec::new());
+    // Wait 1 follows the first failure and removes it. Wait 2 follows a
+    // success; it saves another posting and brings the failure back, which
+    // wait 3 removes again.
+    let pause = async |wait: Duration| {
+        let calls = {
+            let mut waits = waits.lock().unwrap();
+            waits.push(wait);
+            waits.len()
+        };
+        match calls {
+            1 | 3 => allow_checkpoint_updates(&pool).await,
+            2 => {
+                save(&store, &base_keyed("renewal-2")).await;
+                settle(&pool).await;
+                fail_checkpoint_updates(&pool, SERIALIZATION_FAILURE).await;
+            }
+            _ => {}
+        }
+    };
+    let worker = retrying_worker(&pool);
+    worker.run(stop_on_call(5), pause).await.unwrap();
+
+    let (retry, idle) = (Duration::from_millis(10), WorkerConfig::default().idle_wait);
+    assert_eq!(
+        *waits.lock().unwrap(),
+        [retry, idle, retry, idle],
+        "the second failure waits retry_wait again, not double"
+    );
+    assert_base_counted(&pool, 2).await;
+    assert_checkpoint_at(&pool, last_transaction_id(&pool).await).await;
+}
+
 #[sqlx::test]
 async fn permanent_error_stops_without_retrying(pool: PgPool) {
     let id = overflowing_setup(&pool).await;
@@ -871,7 +963,7 @@ async fn permanent_error_stops_without_retrying(pool: PgPool) {
 #[sqlx::test]
 async fn rejected_error_stops_the_loop_without_retrying(pool: PgPool) {
     let ids = save_base(&store(&pool), 2).await;
-    fail_checkpoint_updates(&pool).await;
+    fail_checkpoint_updates(&pool, RAISED).await;
     settle(&pool).await;
 
     let (pause, waits) = recording_pause();
