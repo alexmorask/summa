@@ -1,6 +1,8 @@
 -- Stored balances: running debit and credit totals per account, and per account
--- and tag. They are derived from the entries, so they are not append-only: the
--- worker updates them, and they can be deleted and rebuilt from the log.
+-- and tag, in whole cents. Neither total is ever negative, and while the worker
+-- runs both only grow. They are derived from the entries, so they are not
+-- append-only: the worker updates them, and they can be deleted and rebuilt
+-- from the log. A missing row means both totals are zero.
 CREATE TABLE account_balances (
     account      bigint NOT NULL,
     debit_total  bigint NOT NULL DEFAULT 0,
@@ -21,8 +23,10 @@ CREATE TABLE tag_balances (
     CONSTRAINT tag_balances_totals_non_negative CHECK (debit_total >= 0 AND credit_total >= 0)
 );
 
--- Where the worker has read up to in the log, in (db_tx_id, id) order. One row,
--- seeded at the start of the log.
+-- The last ledger transaction the worker has counted, in (db_tx_id, id) order:
+-- db_tx_id is the database transaction that wrote it, transaction_id its id.
+-- One row, seeded at (0, 0), which means nothing is counted yet. Every batch
+-- and every reset locks this row first, so only one of them runs at a time.
 CREATE TABLE balance_checkpoint (
     only_row       boolean NOT NULL DEFAULT true,
     db_tx_id       xid8    NOT NULL,

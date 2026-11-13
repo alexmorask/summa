@@ -2,6 +2,7 @@
 
 use std::error::Error;
 use std::fmt;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 
@@ -220,7 +221,7 @@ pub enum WorkerError {
     /// `55P03` (lock not available). Running the batch again is safe and may
     /// succeed.
     Unavailable(sqlx::Error),
-    /// The database refused the batch for a reason that won't go away on its
+    /// The worker stopped because the database refused the batch for a reason that won't go away on its
     /// own: every database error that is not transient, such as a violated
     /// constraint, bad data, a raised exception or a value that can't be
     /// decoded. Running the batch again fails the same way, so the worker
@@ -228,16 +229,18 @@ pub enum WorkerError {
     /// batch in the order the worker reads them (`(db_tx_id, id)` order), so
     /// the first id can be larger than the last; it is not a numeric range. It
     /// is set for failures while the batch is being processed or written, and
-    /// `None` for failures before the batch is read or when committing.
-    Rejected {
-        transactions: Option<(i64, i64)>,
+    /// `None` for failures before the batch is read or when committing. (A
+    /// commit that fails for a transient reason is
+    /// [`Unavailable`](Self::Unavailable), like any other transient failure.)
+    Stopped {
+        transactions: Option<(TransactionId, TransactionId)>,
         source: sqlx::Error,
     },
     /// Stored entries couldn't be read back. The error names the transaction.
     Corrupt(CorruptData),
     /// Adding `transaction` would take a balance total beyond what an `i64`
     /// holds. Running the batch again fails the same way.
-    Overflow { transaction: i64 },
+    Overflow { transaction: TransactionId },
 }
 
 impl WorkerError {
@@ -247,9 +250,12 @@ impl WorkerError {
     /// (connection), `40` (serialization failure or deadlock), `53`
     /// (insufficient resources) or `57` (operator intervention), or code
     /// `55P03` (lock not available). Everything else is
-    /// [`Rejected`](Self::Rejected), naming `batch` (the first and last ledger
+    /// [`Stopped`](Self::Stopped), naming `batch` (the first and last ledger
     /// transaction id) when it is known.
-    pub(crate) fn from_database(error: sqlx::Error, batch: Option<(i64, i64)>) -> Self {
+    pub(crate) fn from_database(
+        error: sqlx::Error,
+        batch: Option<(TransactionId, TransactionId)>,
+    ) -> Self {
         let transient = match &error {
             sqlx::Error::Io(_)
             | sqlx::Error::Tls(_)
@@ -267,7 +273,7 @@ impl WorkerError {
         if transient {
             WorkerError::Unavailable(error)
         } else {
-            WorkerError::Rejected {
+            WorkerError::Stopped {
                 transactions: batch,
                 source: error,
             }
@@ -276,7 +282,7 @@ impl WorkerError {
 
     /// Whether running the batch again might succeed. True only for
     /// [`Unavailable`](Self::Unavailable), a transient database failure;
-    /// [`Rejected`](Self::Rejected), [`Corrupt`](Self::Corrupt) and
+    /// [`Stopped`](Self::Stopped), [`Corrupt`](Self::Corrupt) and
     /// [`Overflow`](Self::Overflow) fail the same way on every run.
     pub fn is_retryable(&self) -> bool {
         matches!(self, WorkerError::Unavailable(_))
@@ -287,21 +293,24 @@ impl fmt::Display for WorkerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             WorkerError::Unavailable(error) => write!(f, "database unavailable: {error}"),
-            WorkerError::Rejected {
+            WorkerError::Stopped {
                 transactions: Some((first, last)),
                 source,
             } => write!(
                 f,
-                "balance worker stopped at transactions {first} to {last}: {source}"
+                "balance worker stopped at transactions {} to {}: {source}",
+                first.get(),
+                last.get()
             ),
-            WorkerError::Rejected {
+            WorkerError::Stopped {
                 transactions: None,
                 source,
             } => write!(f, "balance worker stopped: {source}"),
             WorkerError::Corrupt(error) => write!(f, "{error}"),
             WorkerError::Overflow { transaction } => write!(
                 f,
-                "balance worker stopped at transaction {transaction}: a balance total would overflow"
+                "balance worker stopped at transaction {}: a balance total would overflow",
+                transaction.get()
             ),
         }
     }
@@ -310,7 +319,7 @@ impl fmt::Display for WorkerError {
 impl Error for WorkerError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            WorkerError::Unavailable(error) | WorkerError::Rejected { source: error, .. } => {
+            WorkerError::Unavailable(error) | WorkerError::Stopped { source: error, .. } => {
                 Some(error)
             }
             WorkerError::Corrupt(_) | WorkerError::Overflow { .. } => None,
@@ -327,6 +336,8 @@ pub enum StoredBalanceError {
     Balance(BalanceError),
     /// The database couldn't be reached or failed. Reading again is safe.
     Unavailable(sqlx::Error),
+    /// A stored total is negative, which its table forbids.
+    Corrupt(CorruptData),
 }
 
 impl fmt::Display for StoredBalanceError {
@@ -334,6 +345,7 @@ impl fmt::Display for StoredBalanceError {
         match self {
             StoredBalanceError::Balance(error) => write!(f, "{error}"),
             StoredBalanceError::Unavailable(error) => write!(f, "database unavailable: {error}"),
+            StoredBalanceError::Corrupt(error) => write!(f, "{error}"),
         }
     }
 }
@@ -343,6 +355,35 @@ impl Error for StoredBalanceError {
         match self {
             StoredBalanceError::Balance(error) => Some(error),
             StoredBalanceError::Unavailable(error) => Some(error),
+            StoredBalanceError::Corrupt(error) => Some(error),
         }
     }
 }
+
+/// Why a [`BalanceWorker`](super::BalanceWorker) can't be made from a
+/// [`WorkerConfig`](super::WorkerConfig).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InvalidWorkerConfig {
+    /// The first retry wait is longer than the cap on retry waits, so the cap
+    /// would shorten the very first wait.
+    RetryWaitAboveCap {
+        retry_wait: Duration,
+        max_retry_wait: Duration,
+    },
+}
+
+impl fmt::Display for InvalidWorkerConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            InvalidWorkerConfig::RetryWaitAboveCap {
+                retry_wait,
+                max_retry_wait,
+            } => write!(
+                f,
+                "retry wait {retry_wait:?} is longer than the cap on retry waits, {max_retry_wait:?}"
+            ),
+        }
+    }
+}
+
+impl Error for InvalidWorkerConfig {}

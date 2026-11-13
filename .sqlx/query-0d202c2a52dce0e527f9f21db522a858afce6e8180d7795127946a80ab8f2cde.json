@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT count(*) AS \"lag!\" FROM transactions\n               WHERE (db_tx_id, id) > (\n                   SELECT db_tx_id, transaction_id FROM balance_checkpoint\n               )",
+  "query": "SELECT (SELECT count(*) FROM transactions t\n                       WHERE (t.db_tx_id, t.id) > (c.db_tx_id, c.transaction_id)) AS \"lag!\"\n               FROM balance_checkpoint c",
   "describe": {
     "columns": [
       {
@@ -17,5 +17,5 @@
       null
     ]
   },
-  "hash": "39c8d8e7d8ce276f09271946a7b580da28ada48fa7d898522954b43336bb4656"
+  "hash": "0d202c2a52dce0e527f9f21db522a858afce6e8180d7795127946a80ab8f2cde"
 }

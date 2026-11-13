@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO account_balances (account, debit_total, credit_total) SELECT * FROM UNNEST($1::bigint[], $2::bigint[], $3::bigint[])",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "Int8Array",
+        "Int8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f7629d40eff83d23e60fccfd6cd86a731eb6a6a7663cd010127e0f3c9cf8a2c4"
+}

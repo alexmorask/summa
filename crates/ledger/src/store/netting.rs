@@ -30,6 +30,13 @@ impl Totals {
         }
     }
 
+    /// Totals read back from storage. A negative total can't be real (the
+    /// tables' CHECK constraints forbid it), so it is refused instead of being
+    /// added to.
+    pub(crate) fn from_stored(debit: i64, credit: i64) -> Option<Self> {
+        (debit >= 0 && credit >= 0).then(|| Self::from_minor_units(debit, credit))
+    }
+
     /// The normal side's total minus the other side's, the same definition
     /// as `balance` without cutoffs.
     pub(crate) fn net(self, normal: Side) -> Result<Money<Usd>, MoneyError> {
@@ -85,6 +92,27 @@ fn entry_keys(entry: &LogEntry) -> impl Iterator<Item = BalanceKey> + '_ {
             .iter()
             .map(|(kind, value)| BalanceKey::Tag(entry.account, kind.clone(), value.clone())),
     )
+}
+
+/// The first transaction whose debits don't equal its credits, if any. The
+/// save path refuses such a transaction, so one in the log means the log was
+/// written around the ledger; adding it would leave the stored totals
+/// unbalanced. Sums in `i128`, so no amounts can overflow the check itself.
+pub(crate) fn first_unbalanced(transactions: &[LogTransaction]) -> Option<i64> {
+    transactions
+        .iter()
+        .find(|transaction| {
+            let (mut debits, mut credits) = (0_i128, 0_i128);
+            for entry in &transaction.entries {
+                let cents = i128::from(entry.amount.minor_units());
+                match entry.side {
+                    Side::Debit => debits += cents,
+                    Side::Credit => credits += cents,
+                }
+            }
+            debits != credits
+        })
+        .map(|transaction| transaction.id)
 }
 
 /// Adds every entry of `transactions`, in order, to the `stored` totals and
@@ -206,6 +234,47 @@ mod tests {
         );
         assert_eq!(updates[&BalanceKey::Account(acct(1010))], totals(32_160, 0));
         assert_eq!(updates[&BalanceKey::Account(acct(2100))], totals(0, 5_160));
+    }
+
+    #[test]
+    fn stored_totals_must_not_be_negative() {
+        assert_eq!(Totals::from_stored(5, 7), Some(totals(5, 7)));
+        assert_eq!(Totals::from_stored(0, 0), Some(Totals::ZERO));
+        assert_eq!(Totals::from_stored(-1, 7), None);
+        assert_eq!(Totals::from_stored(5, -1), None);
+    }
+
+    #[test]
+    fn first_unbalanced_names_the_first_transaction_whose_sides_differ() {
+        let balanced = |id| LogTransaction {
+            id,
+            entries: vec![entry(1, Side::Debit, 100), entry(2, Side::Credit, 100)],
+        };
+        let lopsided = |id| LogTransaction {
+            id,
+            entries: vec![entry(1, Side::Debit, 100), entry(2, Side::Credit, 99)],
+        };
+        assert_eq!(first_unbalanced(&[balanced(1), balanced(2)]), None);
+        assert_eq!(first_unbalanced(&[]), None);
+        assert_eq!(
+            first_unbalanced(&[balanced(1), lopsided(2), lopsided(3)]),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn balance_check_cannot_overflow() {
+        // Two debits that together exceed i64, against matching credits.
+        let transaction = LogTransaction {
+            id: 9,
+            entries: vec![
+                entry(1, Side::Debit, i64::MAX),
+                entry(1, Side::Debit, i64::MAX),
+                entry(2, Side::Credit, i64::MAX),
+                entry(2, Side::Credit, i64::MAX),
+            ],
+        };
+        assert_eq!(first_unbalanced(&[transaction]), None);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! The balance worker against a real database, one fresh database per test.
 
 use std::cell::Cell;
+use std::collections::HashSet;
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -10,13 +11,14 @@ use proptest::strategy::{Strategy, ValueTree};
 use proptest::test_runner::TestRunner;
 use sqlx::PgPool;
 
-use super::error::{StoredBalanceError, WorkerError};
+use super::error::{InvalidWorkerConfig, StoredBalanceError, WorkerError};
+use super::netting::{BalanceKey, Totals};
 use super::save::Attempt;
 use super::store_tests::{
     base, base_entries, base_keyed, build, build_in, clock_time, effective, hold_open, poll_until,
     store, store_at, wait_for_lock_waiter, waiting_query,
 };
-use super::worker::{BalanceWorker, BatchReport, WorkerConfig};
+use super::worker::{BalanceWorker, BatchReport, WorkerConfig, write_totals};
 use super::{CorruptData, Store, StoredTag};
 use crate::account::{Account, AccountNumber, AccountType, Side};
 use crate::balance::{BalanceError, BalanceQuery, balance};
@@ -27,7 +29,7 @@ use crate::test_support::{
     ASSET, CONTRA_REVENUE, LIABILITY, NOT_IN_CHART, REVENUE, TestEntry, TestTag, chart, key, usd,
     valid_entries_with_varied_tags,
 };
-use crate::transaction::{PostedTransaction, UnpostedTransaction};
+use crate::transaction::{PostedTransaction, TransactionId, UnpostedTransaction};
 
 const CASH: AccountNumber = AccountNumber::new(1010);
 const DEFERRED_REVENUE: AccountNumber = AccountNumber::new(2000);
@@ -53,6 +55,12 @@ fn worker(pool: &PgPool, batch_size: u32) -> BalanceWorker {
             ..WorkerConfig::default()
         },
     )
+    .unwrap()
+}
+
+/// A ledger transaction id as the worker's errors name it.
+fn tid(id: i64) -> TransactionId {
+    TransactionId::new(id.cast_unsigned())
 }
 
 fn report(transactions: u32) -> BatchReport {
@@ -444,15 +452,15 @@ async fn failed_checkpoint_update_rolls_back_the_balances(pool: PgPool) {
     let worker = worker(&pool, 1_000);
     let result = worker.run_batch().await;
     let Err(
-        ref error @ WorkerError::Rejected {
+        ref error @ WorkerError::Stopped {
             transactions: Some(batch),
             ..
         },
     ) = result
     else {
-        panic!("expected Rejected naming the batch, got {result:?}");
+        panic!("expected Stopped naming the batch, got {result:?}");
     };
-    assert_eq!(batch, (id, id));
+    assert_eq!(batch, (tid(id), tid(id)));
     assert!(!error.is_retryable());
     assert_eq!(balance_row_count(&pool).await, 0);
     assert_eq!(checkpoint(&pool).await, (0, 0));
@@ -502,7 +510,7 @@ async fn overflow_stops_with_the_transaction_named(pool: PgPool) {
     let Err(error @ WorkerError::Overflow { transaction }) = result else {
         panic!("expected Overflow, got {result:?}");
     };
-    assert_eq!(transaction, id);
+    assert_eq!(transaction, tid(id));
     assert!(!error.is_retryable());
     let message = error.to_string();
     assert!(message.contains(&format!("transaction {id}")), "{message}");
@@ -845,7 +853,8 @@ async fn transient_errors_retry_with_growing_waits_then_stop(pool: PgPool) {
             retry_wait: Duration::from_millis(10),
             ..WorkerConfig::default()
         },
-    );
+    )
+    .unwrap();
     pool.close().await;
     let (pause, waits) = recording_pause();
     let result = worker.run(|| false, pause).await;
@@ -873,6 +882,7 @@ fn retrying_worker(pool: &PgPool) -> BalanceWorker {
             ..WorkerConfig::default()
         },
     )
+    .unwrap()
 }
 
 #[sqlx::test]
@@ -955,23 +965,23 @@ async fn permanent_error_stops_without_retrying(pool: PgPool) {
     let Err(WorkerError::Overflow { transaction }) = result else {
         panic!("expected Overflow, got {result:?}");
     };
-    assert_eq!(transaction, id);
+    assert_eq!(transaction, tid(id));
     assert!(waits_of(&waits).is_empty());
     assert_eq!(checkpoint(&pool).await, (0, 0));
 }
 
 #[sqlx::test]
-async fn rejected_error_stops_the_loop_without_retrying(pool: PgPool) {
+async fn stopped_error_stops_the_loop_without_retrying(pool: PgPool) {
     let ids = save_base(&store(&pool), 2).await;
     fail_checkpoint_updates(&pool, RAISED).await;
     settle(&pool).await;
 
     let (pause, waits) = recording_pause();
     let result = worker(&pool, 1_000).run(|| false, pause).await;
-    let Err(WorkerError::Rejected { transactions, .. }) = result else {
-        panic!("expected Rejected, got {result:?}");
+    let Err(WorkerError::Stopped { transactions, .. }) = result else {
+        panic!("expected Stopped, got {result:?}");
     };
-    assert_eq!(transactions, Some((ids[0], ids[1])));
+    assert_eq!(transactions, Some((tid(ids[0]), tid(ids[1]))));
     assert!(waits_of(&waits).is_empty());
     assert_eq!(balance_row_count(&pool).await, 0);
     assert_eq!(checkpoint(&pool).await, (0, 0));
@@ -1000,12 +1010,12 @@ async fn constraint_violation_is_a_permanent_error(pool: PgPool) {
     assert!(
         matches!(
             error,
-            WorkerError::Rejected {
+            WorkerError::Stopped {
                 transactions: None,
                 ..
             }
         ),
-        "expected Rejected, got {error:?}"
+        "expected Stopped, got {error:?}"
     );
     assert!(!error.is_retryable());
 }
@@ -1034,15 +1044,16 @@ async fn sqlstate_decides_transient_or_permanent(pool: PgPool) {
     for code in ["23514", "22012", "P0001", "55000"] {
         let error = classify(&pool, code).await;
         assert!(
-            matches!(error, WorkerError::Rejected { .. }),
+            matches!(error, WorkerError::Stopped { .. }),
             "{code}: {error:?}"
         );
     }
 }
 
 #[test]
-fn rejected_names_the_batch_when_known() {
-    let named = WorkerError::from_database(sqlx::Error::RowNotFound, Some((501, 503))).to_string();
+fn stopped_names_the_batch_when_known() {
+    let named = WorkerError::from_database(sqlx::Error::RowNotFound, Some((tid(501), tid(503))))
+        .to_string();
     assert!(named.contains("transactions 501 to 503"), "{named}");
     let unnamed = WorkerError::from_database(sqlx::Error::RowNotFound, None).to_string();
     assert!(unnamed.starts_with("balance worker stopped: "), "{unnamed}");
@@ -1215,10 +1226,17 @@ async fn contra_account_reads_on_its_debit_side(pool: PgPool) {
     )
     .await;
     assert_eq!(
-        store.stored_balance(CONTRA_REVENUE, None).await.unwrap(),
+        store
+            .stored_balance(CONTRA_REVENUE, None)
+            .await
+            .unwrap()
+            .balance,
         usd(100)
     );
-    assert_eq!(store.stored_balance(REVENUE, None).await.unwrap(), usd(100));
+    assert_eq!(
+        store.stored_balance(REVENUE, None).await.unwrap().balance,
+        usd(100)
+    );
 }
 
 #[sqlx::test]
@@ -1235,13 +1253,19 @@ async fn abnormal_balance_is_negative(pool: PgPool) {
         ],
     )
     .await;
-    assert_eq!(store.stored_balance(ASSET, None).await.unwrap(), usd(-100));
+    assert_eq!(
+        store.stored_balance(ASSET, None).await.unwrap().balance,
+        usd(-100)
+    );
 }
 
 #[sqlx::test]
 async fn known_account_with_no_row_reads_zero(pool: PgPool) {
     let store = store(&pool);
-    assert_eq!(store.stored_balance(LIABILITY, None).await.unwrap(), usd(0));
+    assert_eq!(
+        store.stored_balance(LIABILITY, None).await.unwrap().balance,
+        usd(0)
+    );
 }
 
 #[sqlx::test]
@@ -1252,14 +1276,16 @@ async fn tag_balance_with_no_row_reads_zero(pool: PgPool) {
         store
             .stored_balance(ASSET, Some(&TestTag::Alpha(1)))
             .await
-            .unwrap(),
+            .unwrap()
+            .balance,
         usd(100)
     );
     assert_eq!(
         store
             .stored_balance(ASSET, Some(&TestTag::Beta(2)))
             .await
-            .unwrap(),
+            .unwrap()
+            .balance,
         usd(0)
     );
 }
@@ -1335,7 +1361,11 @@ async fn assert_stored_matches(
                 None => BalanceQuery::account(account),
             };
             let expected = balance(saved, &chart(), &query).unwrap();
-            let stored = store.stored_balance(account, tag.as_ref()).await.unwrap();
+            let stored = store
+                .stored_balance(account, tag.as_ref())
+                .await
+                .unwrap()
+                .balance;
             assert_eq!(
                 stored,
                 expected,
@@ -1344,4 +1374,260 @@ async fn assert_stored_matches(
             );
         }
     }
+}
+
+// ---- stored reads say how far the worker had counted ----
+
+#[sqlx::test]
+async fn stored_balance_says_how_far_the_worker_had_counted(pool: PgPool) {
+    let store = store(&pool);
+    let at_start = store.stored_balance(ASSET, None).await.unwrap();
+    assert_eq!(at_start.counted_through, None);
+
+    let ids = save_base(&store, 2).await;
+    settle(&pool).await;
+    let worker = worker(&pool, 1);
+    worker.run_batch().await.unwrap();
+    let first = store.stored_balance(ASSET, None).await.unwrap();
+    assert_eq!(first.balance, usd(100));
+    assert_eq!(first.counted_through, Some(tid(ids[0])));
+
+    worker.catch_up().await.unwrap();
+    let all = store.stored_balance(ASSET, None).await.unwrap();
+    assert_eq!(all.balance, usd(200));
+    assert_eq!(all.counted_through, Some(tid(ids[1])));
+
+    worker.reset().await.unwrap();
+    let reset = store.stored_balance(ASSET, None).await.unwrap();
+    assert_eq!(reset.balance, usd(0));
+    assert_eq!(reset.counted_through, None);
+}
+
+// ---- the write checks what it assumed ----
+
+/// The totals (debit 5, credit 7) the guard tests write.
+fn five_and_seven() -> Totals {
+    Totals::from_stored(5, 7).unwrap()
+}
+
+#[sqlx::test]
+async fn write_refuses_to_insert_over_an_existing_row(pool: PgPool) {
+    record_base_accounts(&pool).await;
+    sqlx::query(
+        "INSERT INTO account_balances (account, debit_total, credit_total) VALUES ($1, 100, 0)",
+    )
+    .bind(i64::from(ASSET.get()))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let before = snapshot(&pool).await;
+
+    // The caller believes the account has no row, but it does.
+    let mut tx = pool.begin().await.unwrap();
+    let result = write_totals(
+        &mut tx,
+        vec![(BalanceKey::Account(ASSET), five_and_seven())],
+        &HashSet::new(),
+    )
+    .await;
+    let error = result.unwrap_err();
+    assert_eq!(
+        error
+            .as_database_error()
+            .and_then(|db| db.code())
+            .as_deref(),
+        Some("23505"),
+        "expected a unique violation, got {error:?}"
+    );
+    drop(tx);
+    assert_eq!(snapshot(&pool).await, before);
+}
+
+#[sqlx::test]
+async fn write_refuses_to_update_a_missing_row(pool: PgPool) {
+    record_base_accounts(&pool).await;
+    let tag = BalanceKey::Tag(ASSET, "alpha".to_owned(), "1".to_owned());
+    for key in [BalanceKey::Account(ASSET), tag] {
+        // The caller believes the key has a row, but it has none.
+        let mut tx = pool.begin().await.unwrap();
+        let result = write_totals(
+            &mut tx,
+            vec![(key.clone(), five_and_seven())],
+            &HashSet::from([key.clone()]),
+        )
+        .await;
+        assert!(
+            matches!(result, Err(sqlx::Error::RowNotFound)),
+            "{key:?}: {result:?}"
+        );
+    }
+    assert_eq!(balance_row_count(&pool).await, 0);
+}
+
+#[sqlx::test]
+async fn write_inserts_new_keys_and_updates_existing_ones(pool: PgPool) {
+    record_base_accounts(&pool).await;
+    let (old, new) = (BalanceKey::Account(ASSET), BalanceKey::Account(REVENUE));
+    sqlx::query(
+        "INSERT INTO account_balances (account, debit_total, credit_total) VALUES ($1, 1, 1)",
+    )
+    .bind(i64::from(ASSET.get()))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    write_totals(
+        &mut tx,
+        vec![(old.clone(), five_and_seven()), (new, five_and_seven())],
+        &HashSet::from([old]),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(totals(&pool, ASSET).await, (5, 7));
+    assert_eq!(totals(&pool, REVENUE).await, (5, 7));
+}
+
+// ---- lag and reads fail loudly without a checkpoint ----
+
+#[sqlx::test]
+async fn missing_checkpoint_is_an_error_not_zero_lag(pool: PgPool) {
+    save(&store(&pool), &base()).await;
+    sqlx::query("DELETE FROM balance_checkpoint")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let worker = worker(&pool, 1_000);
+    let expected = CorruptData::MissingCheckpoint;
+    assert!(matches!(worker.lag().await, Err(WorkerError::Corrupt(ref c)) if *c == expected));
+    assert!(matches!(
+        worker.run_batch().await,
+        Err(WorkerError::Corrupt(ref c)) if *c == expected
+    ));
+    assert!(matches!(
+        store(&pool).stored_balance(ASSET, None).await,
+        Err(StoredBalanceError::Corrupt(ref c)) if *c == expected
+    ));
+}
+
+// ---- stopping a run that is failing ----
+
+#[sqlx::test]
+async fn stop_during_a_retry_wait_returns_the_failure(pool: PgPool) {
+    let worker = worker(&pool, 1_000);
+    pool.close().await;
+    let (pause, waits) = recording_pause();
+    // False for the first batch, true once it has failed and waited.
+    let result = worker.run(stop_on_call(2), pause).await;
+    assert!(
+        matches!(result, Err(WorkerError::Unavailable(_))),
+        "expected Unavailable, got {result:?}"
+    );
+    assert_eq!(waits_of(&waits).len(), 1);
+}
+
+#[sqlx::test]
+async fn stop_after_a_recovery_is_ok(pool: PgPool) {
+    save(&store(&pool), &base()).await;
+    settle(&pool).await;
+    fail_checkpoint_updates(&pool, "40001").await;
+    let worker = retrying_worker(&pool);
+    // Batch 1 fails transiently, and the fault is lifted during the wait.
+    // Batch 2 succeeds, so the stop that follows has no failure to report.
+    let lifted = Cell::new(false);
+    let result = worker
+        .run(stop_on_call(3), async |_wait: Duration| {
+            if !lifted.replace(true) {
+                allow_checkpoint_updates(&pool).await;
+            }
+        })
+        .await;
+    result.unwrap();
+    assert_base_counted(&pool, 1).await;
+}
+
+// ---- the retry wait has a cap ----
+
+#[sqlx::test]
+async fn retry_waits_stop_growing_at_the_cap(pool: PgPool) {
+    let worker = BalanceWorker::new(
+        pool.clone(),
+        WorkerConfig {
+            retries: 5,
+            retry_wait: Duration::from_millis(10),
+            max_retry_wait: Duration::from_millis(25),
+            ..WorkerConfig::default()
+        },
+    )
+    .unwrap();
+    pool.close().await;
+    let (pause, waits) = recording_pause();
+    let result = worker.run(|| false, pause).await;
+    assert!(matches!(result, Err(WorkerError::Unavailable(_))));
+    let ms = Duration::from_millis;
+    assert_eq!(waits_of(&waits), [ms(10), ms(20), ms(25), ms(25), ms(25)]);
+}
+
+#[sqlx::test]
+async fn an_enormous_retry_count_cannot_overflow_the_wait(pool: PgPool) {
+    let worker = BalanceWorker::new(
+        pool.clone(),
+        WorkerConfig {
+            retries: 200,
+            ..WorkerConfig::default()
+        },
+    )
+    .unwrap();
+    pool.close().await;
+    let (pause, waits) = recording_pause();
+    let _ = worker.run(|| false, pause).await;
+    let cap = WorkerConfig::default().max_retry_wait;
+    let waits = waits_of(&waits);
+    assert_eq!(waits.len(), 200);
+    assert!(waits.iter().all(|wait| *wait <= cap));
+    assert_eq!(waits.last(), Some(&cap));
+}
+
+#[sqlx::test]
+async fn a_first_wait_above_the_cap_is_refused(pool: PgPool) {
+    let config = WorkerConfig {
+        retry_wait: Duration::from_secs(60),
+        max_retry_wait: Duration::from_secs(1),
+        ..WorkerConfig::default()
+    };
+    assert_eq!(
+        BalanceWorker::new(pool, config).err(),
+        Some(InvalidWorkerConfig::RetryWaitAboveCap {
+            retry_wait: Duration::from_secs(60),
+            max_retry_wait: Duration::from_secs(1),
+        })
+    );
+}
+
+// ---- a transaction that doesn't balance stops the worker ----
+
+#[sqlx::test]
+async fn unbalanced_transaction_stops_the_worker_and_is_not_skipped(pool: PgPool) {
+    sqlx::query("DROP TRIGGER transactions_balanced_at_commit ON transactions")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP TRIGGER entries_balanced_at_commit ON entries")
+        .execute(&pool)
+        .await
+        .unwrap();
+    // Debits 100, credits 90.
+    let insert_bad = async || {
+        insert_raw(
+            &pool,
+            "unbalanced-1",
+            &[(0, ASSET, "debit", 100), (1, REVENUE, "credit", 90)],
+            &[],
+        )
+        .await
+    };
+    assert_corrupt_row_stops_the_worker(&pool, insert_bad, |transaction| CorruptData::Unbalanced {
+        transaction,
+    })
+    .await;
 }

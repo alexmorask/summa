@@ -28,8 +28,8 @@ pub use money::{Currency, Money, MoneyError, Usd};
 pub use reversal::ReversalError;
 #[cfg(feature = "postgres")]
 pub use store::{
-    BalanceWorker, BatchReport, CorruptData, LoadError, SaveError, Saved, Store,
-    StoredBalanceError, StoredTag, WorkerConfig, WorkerError,
+    BalanceWorker, BatchReport, CorruptData, InvalidWorkerConfig, LoadError, SaveError, Saved,
+    Store, StoredBalance, StoredBalanceError, StoredTag, WorkerConfig, WorkerError,
 };
 pub use tag::Tag;
 pub use transaction::{

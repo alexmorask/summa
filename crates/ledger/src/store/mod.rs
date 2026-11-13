@@ -27,8 +27,9 @@ use crate::transaction::PostedTransaction;
 
 use confirmed::ConfirmedAccounts;
 
-pub use error::{LoadError, SaveError, StoredBalanceError, WorkerError};
+pub use error::{InvalidWorkerConfig, LoadError, SaveError, StoredBalanceError, WorkerError};
 pub use rows::CorruptData;
+pub use stored_balance::StoredBalance;
 pub use stored_tag::StoredTag;
 pub use worker::{BalanceWorker, BatchReport, WorkerConfig};
 

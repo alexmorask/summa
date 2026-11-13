@@ -115,6 +115,14 @@ pub enum CorruptData {
     InvalidIdempotencyKey { transaction: i64, key: String },
     /// Two entry rows share a position.
     DuplicatePosition { transaction: i64, position: i16 },
+    /// The one-row checkpoint table has no row. The migration seeds it and
+    /// nothing deletes it.
+    MissingCheckpoint,
+    /// A stored balance total is negative, which its table forbids.
+    NegativeTotal { account: i64 },
+    /// A ledger transaction's debits and credits differ. The save path never
+    /// writes one, so the log was changed around the ledger.
+    Unbalanced { transaction: i64 },
     /// Two tag rows share a position and kind.
     DuplicateTag {
         transaction: i64,
@@ -168,6 +176,17 @@ impl fmt::Display for CorruptData {
             } => write!(
                 f,
                 "corrupt data in transaction {transaction}: more than one entry at position {position}"
+            ),
+            CorruptData::MissingCheckpoint => {
+                write!(f, "corrupt data: the balance checkpoint row is missing")
+            }
+            CorruptData::NegativeTotal { account } => write!(
+                f,
+                "corrupt data in the stored balances of account {account}: a total is negative"
+            ),
+            CorruptData::Unbalanced { transaction } => write!(
+                f,
+                "corrupt data in transaction {transaction}: its debits and credits differ"
             ),
             CorruptData::DuplicateTag {
                 transaction,
