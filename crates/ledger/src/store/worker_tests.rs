@@ -327,26 +327,38 @@ async fn tag_balances_follow_entry_tags(pool: PgPool) {
     assert_eq!(beta, 0);
 }
 
-#[sqlx::test]
-async fn failed_checkpoint_update_rolls_back_the_balances(pool: PgPool) {
-    save(&store(&pool), &base()).await;
+/// Makes every checkpoint update raise an exception (SQLSTATE `P0001`).
+async fn fail_checkpoint_updates(pool: &PgPool) {
     sqlx::raw_sql(
         "CREATE FUNCTION fail_checkpoint() RETURNS trigger LANGUAGE plpgsql AS \
          $$ BEGIN RAISE EXCEPTION 'injected checkpoint failure'; END $$; \
          CREATE TRIGGER fail_checkpoint BEFORE UPDATE ON balance_checkpoint \
          FOR EACH ROW EXECUTE FUNCTION fail_checkpoint();",
     )
-    .execute(&pool)
+    .execute(pool)
     .await
     .unwrap();
+}
+
+#[sqlx::test]
+async fn failed_checkpoint_update_rolls_back_the_balances(pool: PgPool) {
+    let id = save(&store(&pool), &base()).await;
+    fail_checkpoint_updates(&pool).await;
 
     settle(&pool).await;
     let worker = worker(&pool, 1_000);
     let result = worker.run_batch().await;
-    assert!(
-        matches!(result, Err(WorkerError::Unavailable(_))),
-        "expected Unavailable, got {result:?}"
-    );
+    let Err(
+        ref error @ WorkerError::Rejected {
+            transactions: Some(batch),
+            ..
+        },
+    ) = result
+    else {
+        panic!("expected Rejected naming the batch, got {result:?}");
+    };
+    assert_eq!(batch, (id, id));
+    assert!(!error.is_retryable());
     assert_eq!(balance_row_count(&pool).await, 0);
     assert_eq!(checkpoint(&pool).await, (0, 0));
 
@@ -648,6 +660,96 @@ async fn permanent_error_stops_without_retrying(pool: PgPool) {
     assert_eq!(transaction, id);
     assert!(waits_of(&waits).is_empty());
     assert_eq!(checkpoint(&pool).await, (0, 0));
+}
+
+#[sqlx::test]
+async fn rejected_error_stops_the_loop_without_retrying(pool: PgPool) {
+    let store = store(&pool);
+    let first = save(&store, &base_keyed("renewal-1")).await;
+    let last = save(&store, &base_keyed("renewal-2")).await;
+    fail_checkpoint_updates(&pool).await;
+    settle(&pool).await;
+
+    let (pause, waits) = recording_pause();
+    let result = worker(&pool, 1_000).run(|| false, pause).await;
+    let Err(WorkerError::Rejected { transactions, .. }) = result else {
+        panic!("expected Rejected, got {result:?}");
+    };
+    assert_eq!(transactions, Some((first, last)));
+    assert!(waits_of(&waits).is_empty());
+    assert_eq!(balance_row_count(&pool).await, 0);
+    assert_eq!(checkpoint(&pool).await, (0, 0));
+}
+
+#[sqlx::test]
+async fn closed_pool_is_a_transient_error(pool: PgPool) {
+    let worker = worker(&pool, 1_000);
+    pool.close().await;
+    let result = worker.run_batch().await;
+    let Err(error @ WorkerError::Unavailable(_)) = result else {
+        panic!("expected Unavailable, got {result:?}");
+    };
+    assert!(error.is_retryable());
+}
+
+#[sqlx::test]
+async fn constraint_violation_is_a_permanent_error(pool: PgPool) {
+    let violation = sqlx::query(
+        "INSERT INTO account_balances (account, debit_total, credit_total) VALUES (1, -1, 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap_err();
+    let error = WorkerError::from_database(violation, None);
+    assert!(
+        matches!(
+            error,
+            WorkerError::Rejected {
+                transactions: None,
+                ..
+            }
+        ),
+        "expected Rejected, got {error:?}"
+    );
+    assert!(!error.is_retryable());
+}
+
+/// The worker's classification of a database error with SQLSTATE `code`.
+async fn classify(pool: &PgPool, code: &str) -> WorkerError {
+    let raised = sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "DO $$ BEGIN RAISE EXCEPTION 'injected' USING ERRCODE = '{code}'; END $$"
+    )))
+    .execute(pool)
+    .await
+    .unwrap_err();
+    WorkerError::from_database(raised, None)
+}
+
+#[sqlx::test]
+async fn sqlstate_decides_transient_or_permanent(pool: PgPool) {
+    // Connection, serialization failure, deadlock, out of connections,
+    // query cancelled, lock not available.
+    for code in ["08006", "40001", "40P01", "53300", "57014", "55P03"] {
+        let error = classify(&pool, code).await;
+        assert!(error.is_retryable(), "{code}: {error:?}");
+    }
+    // Check violation, division by zero, raised exception, and another
+    // class 55 code: only 55P03 of that class is transient.
+    for code in ["23514", "22012", "P0001", "55000"] {
+        let error = classify(&pool, code).await;
+        assert!(
+            matches!(error, WorkerError::Rejected { .. }),
+            "{code}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn rejected_names_the_batch_when_known() {
+    let named = WorkerError::from_database(sqlx::Error::RowNotFound, Some((501, 503))).to_string();
+    assert!(named.contains("transactions 501 to 503"), "{named}");
+    let unnamed = WorkerError::from_database(sqlx::Error::RowNotFound, None).to_string();
+    assert!(unnamed.starts_with("balance worker stopped: "), "{unnamed}");
 }
 
 /// Both balance tables as sorted rows, for comparing before and after.

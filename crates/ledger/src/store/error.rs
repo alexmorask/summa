@@ -212,9 +212,21 @@ impl From<LoadError> for SaveError {
 /// the balances and the checkpoint stay as they were.
 #[derive(Debug)]
 pub enum WorkerError {
-    /// The database couldn't be reached or failed. Running the batch again
-    /// is safe.
+    /// A transient database failure: the connection or pool failed, the
+    /// server is short of resources or shutting down, or the statement lost a
+    /// serialization, deadlock or lock-wait race. Running the batch again is
+    /// safe and may succeed.
     Unavailable(sqlx::Error),
+    /// The database refused the batch for a reason that won't go away on its
+    /// own, such as a violated constraint, bad data, a raised exception or a
+    /// value that can't be decoded. Running the batch again fails the same
+    /// way, so the worker stops. `transactions` is the first and last ledger
+    /// transaction id of the batch when the failure came after the batch was
+    /// read, and `None` before that.
+    Rejected {
+        transactions: Option<(i64, i64)>,
+        source: sqlx::Error,
+    },
     /// Stored entries couldn't be read back.
     Corrupt(CorruptData),
     /// Adding `transaction` would take a balance total beyond what an `i64`
@@ -223,8 +235,43 @@ pub enum WorkerError {
 }
 
 impl WorkerError {
+    /// Classifies a database error from the worker. Transient failures are
+    /// [`Unavailable`](Self::Unavailable): an I/O, TLS or pool error, a
+    /// crashed driver worker, or a database error with SQLSTATE class `08`
+    /// (connection), `40` (serialization failure or deadlock), `53`
+    /// (insufficient resources) or `57` (operator intervention), or code
+    /// `55P03` (lock not available). Everything else is
+    /// [`Rejected`](Self::Rejected), naming `batch` (the first and last ledger
+    /// transaction id) when it is known.
+    pub(crate) fn from_database(error: sqlx::Error, batch: Option<(i64, i64)>) -> Self {
+        let transient = match &error {
+            sqlx::Error::Io(_)
+            | sqlx::Error::Tls(_)
+            | sqlx::Error::PoolTimedOut
+            | sqlx::Error::PoolClosed
+            | sqlx::Error::WorkerCrashed => true,
+            sqlx::Error::Database(db) => db.code().is_some_and(|code| {
+                ["08", "40", "53", "57"]
+                    .iter()
+                    .any(|class| code.starts_with(class))
+                    || code == "55P03"
+            }),
+            _ => false,
+        };
+        if transient {
+            WorkerError::Unavailable(error)
+        } else {
+            WorkerError::Rejected {
+                transactions: batch,
+                source: error,
+            }
+        }
+    }
+
     /// Whether running the batch again might succeed. True only for
-    /// [`Unavailable`](Self::Unavailable); every other error repeats.
+    /// [`Unavailable`](Self::Unavailable), a transient database failure;
+    /// [`Rejected`](Self::Rejected), [`Corrupt`](Self::Corrupt) and
+    /// [`Overflow`](Self::Overflow) fail the same way on every run.
     pub fn is_retryable(&self) -> bool {
         matches!(self, WorkerError::Unavailable(_))
     }
@@ -234,6 +281,17 @@ impl fmt::Display for WorkerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             WorkerError::Unavailable(error) => write!(f, "database unavailable: {error}"),
+            WorkerError::Rejected {
+                transactions: Some((first, last)),
+                source,
+            } => write!(
+                f,
+                "balance worker stopped at transactions {first} to {last}: {source}"
+            ),
+            WorkerError::Rejected {
+                transactions: None,
+                source,
+            } => write!(f, "balance worker stopped: {source}"),
             WorkerError::Corrupt(error) => write!(f, "{error}"),
             WorkerError::Overflow { transaction } => write!(
                 f,
@@ -246,7 +304,9 @@ impl fmt::Display for WorkerError {
 impl Error for WorkerError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            WorkerError::Unavailable(error) => Some(error),
+            WorkerError::Unavailable(error) | WorkerError::Rejected { source: error, .. } => {
+                Some(error)
+            }
             WorkerError::Corrupt(_) | WorkerError::Overflow { .. } => None,
         }
     }

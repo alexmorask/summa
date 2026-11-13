@@ -64,9 +64,9 @@ impl BalanceWorker {
     /// Runs one batch in its own database transaction. On error nothing is
     /// written.
     pub async fn run_batch(&self) -> Result<BatchReport, WorkerError> {
-        let mut tx = self.pool.begin().await.map_err(WorkerError::Unavailable)?;
+        let mut tx = self.pool.begin().await.map_err(unbatched)?;
         let report = self.batch_on(&mut tx).await?;
-        tx.commit().await.map_err(WorkerError::Unavailable)?;
+        tx.commit().await.map_err(unbatched)?;
         Ok(report)
     }
 
@@ -120,9 +120,9 @@ impl BalanceWorker {
     /// one database transaction. It takes the checkpoint lock first, like a
     /// batch, so it waits for a running batch and no batch sees a half-reset.
     pub async fn reset(&self) -> Result<(), WorkerError> {
-        let mut tx = self.pool.begin().await.map_err(WorkerError::Unavailable)?;
+        let mut tx = self.pool.begin().await.map_err(unbatched)?;
         self.reset_on(&mut tx).await?;
-        tx.commit().await.map_err(WorkerError::Unavailable)
+        tx.commit().await.map_err(unbatched)
     }
 
     /// The reset inside `tx`: everything but begin and commit. A separate
@@ -135,15 +135,15 @@ impl BalanceWorker {
         sqlx::query!("DELETE FROM tag_balances")
             .execute(&mut **tx)
             .await
-            .map_err(WorkerError::Unavailable)?;
+            .map_err(unbatched)?;
         sqlx::query!("DELETE FROM account_balances")
             .execute(&mut **tx)
             .await
-            .map_err(WorkerError::Unavailable)?;
+            .map_err(unbatched)?;
         sqlx::query!("UPDATE balance_checkpoint SET db_tx_id = '0'::xid8, transaction_id = 0")
             .execute(&mut **tx)
             .await
-            .map_err(WorkerError::Unavailable)?;
+            .map_err(unbatched)?;
         Ok(())
     }
 
@@ -168,7 +168,7 @@ impl BalanceWorker {
         )
         .fetch_one(&self.pool)
         .await
-        .map_err(WorkerError::Unavailable)?;
+        .map_err(unbatched)?;
         // A count is never negative.
         Ok(row.lag.cast_unsigned())
     }
@@ -198,22 +198,25 @@ impl BalanceWorker {
         )
         .fetch_all(&mut **tx)
         .await
-        .map_err(WorkerError::Unavailable)?;
+        .map_err(unbatched)?;
         let Some(last) = next.last() else {
             return Ok(BatchReport { transactions: 0 });
         };
         let (last_db_tx_id, last_id) = (last.db_tx_id, last.id);
         let ids: Vec<i64> = next.iter().map(|row| row.id).collect();
+        // From here on a database error names the batch.
+        let batch = (ids[0], last_id);
+        let batched = |error| WorkerError::from_database(error, Some(batch));
 
-        let transactions = load_log(tx, &ids).await?;
+        let transactions = load_log(tx, &ids, batch).await?;
 
-        let mut netting = Netting::new(stored_totals(tx, &transactions).await?);
+        let mut netting = Netting::new(stored_totals(tx, &transactions).await.map_err(batched)?);
         for transaction in &transactions {
             netting
                 .apply(transaction)
                 .map_err(|NettingOverflow { transaction }| WorkerError::Overflow { transaction })?;
         }
-        write_totals(tx, netting.updates()).await?;
+        write_totals(tx, netting.updates()).await.map_err(batched)?;
 
         sqlx::query!(
             "UPDATE balance_checkpoint SET db_tx_id = $1::text::xid8, transaction_id = $2",
@@ -222,12 +225,17 @@ impl BalanceWorker {
         )
         .execute(&mut **tx)
         .await
-        .map_err(WorkerError::Unavailable)?;
+        .map_err(batched)?;
 
         Ok(BatchReport {
             transactions: u32::try_from(ids.len()).unwrap_or(u32::MAX),
         })
     }
+}
+
+/// Classifies a database error that happened before a batch was read.
+fn unbatched(error: sqlx::Error) -> WorkerError {
+    WorkerError::from_database(error, None)
 }
 
 /// Locks the checkpoint row and returns it. Every writer of the balance tables
@@ -239,7 +247,7 @@ async fn lock_checkpoint(tx: &mut Transaction<'_, Postgres>) -> Result<Checkpoin
     )
     .fetch_one(&mut **tx)
     .await
-    .map_err(WorkerError::Unavailable)?;
+    .map_err(unbatched)?;
     Ok(Checkpoint {
         db_tx_id: row.db_tx_id,
         transaction_id: row.transaction_id,
@@ -257,7 +265,7 @@ struct Checkpoint {
 async fn stored_totals(
     tx: &mut Transaction<'_, Postgres>,
     transactions: &[LogTransaction],
-) -> Result<Vec<(BalanceKey, Totals)>, WorkerError> {
+) -> Result<Vec<(BalanceKey, Totals)>, sqlx::Error> {
     let keys = Netting::keys_for(transactions);
     let mut accounts = Vec::new();
     let (mut tag_accounts, mut kinds, mut values) = (Vec::new(), Vec::new(), Vec::new());
@@ -278,8 +286,7 @@ async fn stored_totals(
         &accounts
     )
     .fetch_all(&mut **tx)
-    .await
-    .map_err(WorkerError::Unavailable)?;
+    .await?;
     let tag_rows = sqlx::query!(
         "SELECT account, kind, value, debit_total, credit_total FROM tag_balances \
          WHERE (account, kind, value) IN \
@@ -289,8 +296,7 @@ async fn stored_totals(
         &values
     )
     .fetch_all(&mut **tx)
-    .await
-    .map_err(WorkerError::Unavailable)?;
+    .await?;
 
     let totals = |debit, credit| Totals {
         debit: Money::from_minor_units(debit),
@@ -326,10 +332,13 @@ async fn stored_totals(
 }
 
 /// The entries and tags of the ledger transactions `ids`, in the order given.
+/// `batch` is the first and last id, named by a database error.
 async fn load_log(
     tx: &mut Transaction<'_, Postgres>,
     ids: &[i64],
+    batch: (i64, i64),
 ) -> Result<Vec<LogTransaction>, WorkerError> {
+    let batched = |error| WorkerError::from_database(error, Some(batch));
     let entries = sqlx::query_as!(
         EntryRow,
         "SELECT transaction_id, position, account, side, amount, currency \
@@ -338,7 +347,7 @@ async fn load_log(
     )
     .fetch_all(&mut **tx)
     .await
-    .map_err(WorkerError::Unavailable)?;
+    .map_err(batched)?;
     let tags = sqlx::query_as!(
         TagRow,
         "SELECT transaction_id, position, kind, value \
@@ -347,7 +356,7 @@ async fn load_log(
     )
     .fetch_all(&mut **tx)
     .await
-    .map_err(WorkerError::Unavailable)?;
+    .map_err(batched)?;
 
     let mut parsed: HashMap<i64, ParsedEntries> = HashMap::new();
     for row in entries {
@@ -403,7 +412,7 @@ async fn load_log(
 async fn write_totals(
     tx: &mut Transaction<'_, Postgres>,
     updates: Vec<(BalanceKey, Totals)>,
-) -> Result<(), WorkerError> {
+) -> Result<(), sqlx::Error> {
     let (mut accounts, mut debits, mut credits) = (Vec::new(), Vec::new(), Vec::new());
     let (mut tag_accounts, mut kinds, mut values, mut tag_debits, mut tag_credits) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
@@ -435,8 +444,7 @@ async fn write_totals(
             &credits
         )
         .execute(&mut **tx)
-        .await
-        .map_err(WorkerError::Unavailable)?;
+        .await?;
     }
     if !tag_accounts.is_empty() {
         sqlx::query!(
@@ -451,8 +459,7 @@ async fn write_totals(
             &tag_credits
         )
         .execute(&mut **tx)
-        .await
-        .map_err(WorkerError::Unavailable)?;
+        .await?;
     }
     Ok(())
 }
