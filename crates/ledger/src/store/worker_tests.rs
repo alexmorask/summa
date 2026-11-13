@@ -313,11 +313,62 @@ async fn same_database_transaction_spans_a_batch_boundary(pool: PgPool) {
 
     settle(&pool).await;
     let worker = worker(&pool, 1);
-    let mut reports = Vec::new();
-    for _ in 0..3 {
-        reports.push(worker.run_batch().await.unwrap());
-    }
-    assert_eq!(reports, [report(1), report(1), report(0)]);
+    assert_eq!(worker.run_batch().await.unwrap(), report(1));
+    assert_eq!(
+        worker.lag().await.unwrap(),
+        1,
+        "the second is still to count"
+    );
+    assert_eq!(worker.run_batch().await.unwrap(), report(1));
+    assert_eq!(worker.run_batch().await.unwrap(), report(0));
+    assert_eq!(worker.lag().await.unwrap(), 0);
+    assert_base_counted(&pool, 2).await;
+}
+
+/// Inserts the base transaction keyed `key_text` inside the open `tx` and
+/// returns its id.
+async fn insert_in(
+    store: &Store<TestTag>,
+    tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
+    key_text: &str,
+) -> i64 {
+    let Attempt::Inserted(posted) = store
+        .insert_on(tx, &base_keyed(key_text), clock_time())
+        .await
+        .unwrap()
+    else {
+        panic!("{key_text} should have inserted");
+    };
+    id_of(&posted)
+}
+
+#[sqlx::test]
+async fn log_order_is_transaction_id_then_row_id_not_row_id_alone(pool: PgPool) {
+    record_base_accounts(&pool).await;
+    let store = store(&pool);
+    // X takes its database transaction id first, so its id is the lower one.
+    let mut x = hold_safe_line(&pool).await;
+    let mut y = hold_safe_line(&pool).await;
+    // Y inserts and commits first, so it draws the lower ledger transaction id.
+    let y_id = insert_in(&store, &mut y, "renewal-y").await;
+    y.commit().await.unwrap();
+    let x_id = insert_in(&store, &mut x, "renewal-x").await;
+    x.commit().await.unwrap();
+    assert!(y_id < x_id, "Y has the lower ledger transaction id");
+    assert!(
+        db_tx_id_of(&pool, x_id).await < db_tx_id_of(&pool, y_id).await,
+        "X has the lower database transaction id"
+    );
+
+    settle(&pool).await;
+    let worker = worker(&pool, 1);
+    assert_eq!(worker.run_batch().await.unwrap(), report(1));
+    assert_checkpoint_at(&pool, x_id).await;
+    assert_eq!(worker.lag().await.unwrap(), 1, "Y is still to count");
+
+    assert_eq!(worker.run_batch().await.unwrap(), report(1));
+    assert_checkpoint_at(&pool, y_id).await;
+    assert_eq!(worker.run_batch().await.unwrap(), report(0));
     assert_base_counted(&pool, 2).await;
 }
 
@@ -482,6 +533,32 @@ async fn later_posting_finishing_first_is_not_skipped(pool: PgPool) {
     assert_eq!(worker.catch_up().await.unwrap(), 2);
     assert_base_counted(&pool, 2).await;
     assert_checkpoint_at(&pool, b).await;
+}
+
+#[sqlx::test]
+async fn partial_batch_counts_postings_below_the_safe_line(pool: PgPool) {
+    record_base_accounts(&pool).await;
+    let store = store(&pool);
+    let t1 = save(&store, &base_keyed("renewal-1")).await;
+    settle(&pool).await;
+    // A stays open, so the safe line stops at it; B commits above the line.
+    let (tx_a, _) = hold_open(&pool, &store, &base_keyed("renewal-a")).await;
+    save(&store, &base_keyed("renewal-b")).await;
+
+    let worker = worker(&pool, 1_000);
+    assert_eq!(worker.run_batch().await.unwrap(), report(1));
+    assert_checkpoint_at(&pool, t1).await;
+    assert_base_counted(&pool, 1).await;
+    assert_eq!(
+        worker.lag().await.unwrap(),
+        1,
+        "B is committed lag; A isn't committed yet"
+    );
+
+    tx_a.commit().await.unwrap();
+    settle(&pool).await;
+    assert_eq!(worker.catch_up().await.unwrap(), 2);
+    assert_base_counted(&pool, 3).await;
 }
 
 #[sqlx::test]
