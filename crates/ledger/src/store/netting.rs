@@ -17,10 +17,15 @@ pub(crate) struct Totals {
 }
 
 impl Totals {
-    pub(crate) const ZERO: Self = Self {
-        debit: Money::from_minor_units(0),
-        credit: Money::from_minor_units(0),
-    };
+    pub(crate) const ZERO: Self = Self::from_minor_units(0, 0);
+
+    /// Totals from stored whole-cent debit and credit amounts.
+    pub(crate) const fn from_minor_units(debit: i64, credit: i64) -> Self {
+        Self {
+            debit: Money::from_minor_units(debit),
+            credit: Money::from_minor_units(credit),
+        }
+    }
 
     /// The normal side's total minus the other side's, the same definition
     /// as `balance` without cutoffs.
@@ -136,10 +141,7 @@ mod tests {
     }
 
     fn totals(debit: i64, credit: i64) -> Totals {
-        Totals {
-            debit: usd(debit),
-            credit: usd(credit),
-        }
+        Totals::from_minor_units(debit, credit)
     }
 
     fn net_map(

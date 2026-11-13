@@ -5,7 +5,7 @@ use super::netting::Totals;
 use super::{Store, StoredTag};
 use crate::account::AccountNumber;
 use crate::balance::BalanceError;
-use crate::money::{Money, Usd};
+use crate::money::{Money, MoneyError, Usd};
 
 impl<T: StoredTag> Store<T> {
     /// The stored balance of `account`, or of `account` restricted to `tag`.
@@ -48,11 +48,8 @@ impl<T: StoredTag> Store<T> {
             .map(|row| (row.debit_total, row.credit_total)),
         }
         .unwrap_or((0, 0));
-        Totals {
-            debit: Money::from_minor_units(debit),
-            credit: Money::from_minor_units(credit),
-        }
-        .net(normal_side)
-        .map_err(|_| StoredBalanceError::Balance(BalanceError::Overflow))
+        Totals::from_minor_units(debit, credit)
+            .net(normal_side)
+            .map_err(|MoneyError::Overflow| StoredBalanceError::Balance(BalanceError::Overflow))
     }
 }

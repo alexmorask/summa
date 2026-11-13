@@ -13,8 +13,7 @@ use super::error::WorkerError;
 use super::netting::{
     BalanceKey, LogEntry, LogTransaction, NettingOverflow, Totals, keys_for, net,
 };
-use super::rows::{CorruptData, EntryRow, TagRow, parse_entry};
-use crate::money::Money;
+use super::rows::{CorruptData, EntryRow, ParsedEntry, TagRow, parse_entry};
 
 /// How the worker batches, waits and retries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -142,11 +141,9 @@ impl BalanceWorker {
             .execute(&mut **tx)
             .await
             .map_err(unbatched)?;
-        sqlx::query!("UPDATE balance_checkpoint SET db_tx_id = '0'::xid8, transaction_id = 0")
-            .execute(&mut **tx)
+        write_checkpoint(tx, &Checkpoint::START)
             .await
-            .map_err(unbatched)?;
-        Ok(())
+            .map_err(unbatched)
     }
 
     /// Resets, then replays the whole log. Returns how many ledger
@@ -204,10 +201,13 @@ impl BalanceWorker {
         let Some(last) = next.last() else {
             return Ok(BatchReport { transactions: 0 });
         };
-        let (last_db_tx_id, last_id) = (last.db_tx_id, last.id);
+        let end = Checkpoint {
+            db_tx_id: last.db_tx_id,
+            transaction_id: last.id,
+        };
         let ids: Vec<i64> = next.iter().map(|row| row.id).collect();
         // From here on a database error names the batch.
-        let batch = (ids[0], last_id);
+        let batch = (ids[0], end.transaction_id);
         let batched = |error| WorkerError::from_database(error, Some(batch));
 
         let transactions = load_log(tx, &ids, batch).await?;
@@ -217,17 +217,11 @@ impl BalanceWorker {
             .map_err(|NettingOverflow { transaction }| WorkerError::Overflow { transaction })?;
         write_totals(tx, updates).await.map_err(batched)?;
 
-        sqlx::query!(
-            "UPDATE balance_checkpoint SET db_tx_id = $1::text::xid8, transaction_id = $2",
-            last_db_tx_id.to_string(),
-            last_id
-        )
-        .execute(&mut **tx)
-        .await
-        .map_err(batched)?;
+        write_checkpoint(tx, &end).await.map_err(batched)?;
 
         Ok(BatchReport {
-            transactions: u32::try_from(ids.len()).unwrap_or(u32::MAX),
+            transactions: u32::try_from(ids.len())
+                .expect("a batch never holds more transactions than its u32 limit"),
         })
     }
 }
@@ -257,6 +251,29 @@ async fn lock_checkpoint(tx: &mut Transaction<'_, Postgres>) -> Result<Checkpoin
 struct Checkpoint {
     db_tx_id: i64,
     transaction_id: i64,
+}
+
+impl Checkpoint {
+    /// Before the first ledger transaction: nothing counted yet.
+    const START: Self = Self {
+        db_tx_id: 0,
+        transaction_id: 0,
+    };
+}
+
+/// Moves the checkpoint to `checkpoint`. The caller holds the checkpoint lock.
+async fn write_checkpoint(
+    tx: &mut Transaction<'_, Postgres>,
+    checkpoint: &Checkpoint,
+) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        "UPDATE balance_checkpoint SET db_tx_id = $1::text::xid8, transaction_id = $2",
+        checkpoint.db_tx_id.to_string(),
+        checkpoint.transaction_id
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 /// The stored totals of every key `transactions` add to. A key with no
@@ -297,20 +314,21 @@ async fn stored_totals(
     .fetch_all(&mut **tx)
     .await?;
 
-    let totals = |debit, credit| Totals {
-        debit: Money::from_minor_units(debit),
-        credit: Money::from_minor_units(credit),
-    };
     let stored_accounts: HashMap<i64, Totals> = account_rows
         .into_iter()
-        .map(|row| (row.account, totals(row.debit_total, row.credit_total)))
+        .map(|row| {
+            (
+                row.account,
+                Totals::from_minor_units(row.debit_total, row.credit_total),
+            )
+        })
         .collect();
     let stored_tags: HashMap<(i64, String, String), Totals> = tag_rows
         .into_iter()
         .map(|row| {
             (
                 (row.account, row.kind, row.value),
-                totals(row.debit_total, row.credit_total),
+                Totals::from_minor_units(row.debit_total, row.credit_total),
             )
         })
         .collect();
@@ -360,8 +378,12 @@ async fn load_log(
     let mut parsed: HashMap<i64, ParsedEntries> = HashMap::new();
     for row in entries {
         let transaction = row.transaction_id;
-        let (position, account, side, amount) =
-            parse_entry(transaction, row).map_err(WorkerError::Corrupt)?;
+        let ParsedEntry {
+            position,
+            account,
+            side,
+            amount,
+        } = parse_entry(transaction, row).map_err(WorkerError::Corrupt)?;
         let entry = LogEntry {
             account,
             side,

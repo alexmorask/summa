@@ -193,13 +193,17 @@ fn id(transaction: i64, column: &'static str, value: i64) -> Result<TransactionI
         })
 }
 
-/// Parses one entry row of `transaction` into its position, account, side
-/// and amount. The currency must be one the ledger knows, and the amount
-/// positive.
-pub(crate) fn parse_entry(
-    transaction: i64,
-    row: EntryRow,
-) -> Result<(i16, AccountNumber, Side, Money<Usd>), CorruptData> {
+/// One entry row, parsed: where it sits in its transaction, and what it posts.
+pub(crate) struct ParsedEntry {
+    pub(crate) position: i16,
+    pub(crate) account: AccountNumber,
+    pub(crate) side: Side,
+    pub(crate) amount: Money<Usd>,
+}
+
+/// Parses one entry row of `transaction`. The currency must be one the
+/// ledger knows, and the amount positive.
+pub(crate) fn parse_entry(transaction: i64, row: EntryRow) -> Result<ParsedEntry, CorruptData> {
     if CurrencyCode::parse(&row.currency).is_none() {
         return Err(CorruptData::UnknownCurrency {
             transaction,
@@ -230,12 +234,12 @@ pub(crate) fn parse_entry(
             value: row.amount,
         });
     }
-    Ok((
-        row.position,
+    Ok(ParsedEntry {
+        position: row.position,
         account,
         side,
-        Money::from_minor_units(row.amount),
-    ))
+        amount: Money::from_minor_units(row.amount),
+    })
 }
 
 /// Turns one transaction's rows into a posted transaction. Entries come back
@@ -261,7 +265,12 @@ pub(crate) fn assemble<T: StoredTag>(
 
     let mut parsed: BTreeMap<i16, (AccountNumber, Side, Money<Usd>, Vec<T>)> = BTreeMap::new();
     for row in entries {
-        let (position, account, side, amount) = parse_entry(tx, row)?;
+        let ParsedEntry {
+            position,
+            account,
+            side,
+            amount,
+        } = parse_entry(tx, row)?;
         if parsed
             .insert(position, (account, side, amount, Vec::new()))
             .is_some()
