@@ -13,6 +13,11 @@ impl<T: StoredTag> Store<T> {
     /// worker has processed, with no cutoffs. An account or tag with no
     /// stored row reads as zero. An account missing from the chart is
     /// `Balance(UnknownAccount)`.
+    ///
+    /// It can lag behind the log (see `BalanceWorker::lag`), so never use it
+    /// to decide whether a spend is allowed. A stopped or held-back worker
+    /// leaves values stale, and during a rebuild reads are unreliable until
+    /// it finishes: balances fall to zero and rise as the replay catches up.
     pub async fn stored_balance(
         &self,
         account: AccountNumber,

@@ -10,6 +10,9 @@ use crate::account::{AccountNumber, Side};
 use crate::money::{Money, MoneyError, Usd};
 
 /// The running debit and credit totals of one account or one account-and-tag.
+/// It mirrors the `account_balances_totals_non_negative` and
+/// `tag_balances_totals_non_negative` CHECK constraints: both totals are never
+/// negative.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Totals {
     pub(crate) debit: Money<Usd>,
@@ -52,6 +55,8 @@ pub(crate) struct LogEntry {
     pub(crate) tags: Vec<(String, String)>,
 }
 
+/// One ledger transaction as read from the log; `id` is the ledger
+/// transaction id.
 pub(crate) struct LogTransaction {
     pub(crate) id: i64,
     pub(crate) entries: Vec<LogEntry>,
@@ -84,8 +89,8 @@ fn entry_keys(entry: &LogEntry) -> impl Iterator<Item = BalanceKey> + '_ {
 
 /// Adds every entry of `transactions`, in order, to the `stored` totals and
 /// returns only the keys the batch touched, with their new totals. A key
-/// missing from `stored` starts at zero. If a total would overflow, it
-/// returns only the error, naming the first transaction that overflows.
+/// missing from `stored` starts at zero. On overflow nothing is returned but
+/// the error, which names the first transaction that overflows.
 pub(crate) fn net(
     stored: impl IntoIterator<Item = (BalanceKey, Totals)>,
     transactions: &[LogTransaction],

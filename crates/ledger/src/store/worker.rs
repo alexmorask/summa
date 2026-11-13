@@ -71,8 +71,11 @@ impl BalanceWorker {
         Ok(report)
     }
 
-    /// Runs batches until one finds nothing new. Returns how many ledger
-    /// transactions they counted.
+    /// Runs batches until one finds nothing below the safe line, so it counts
+    /// the log up to the safe line, not the whole log. Committed postings the
+    /// line is still holding back are left for a later call, and
+    /// [`lag`](Self::lag) counts them. Returns how many ledger transactions
+    /// it counted.
     pub async fn catch_up(&self) -> Result<u64, WorkerError> {
         let mut total = 0_u64;
         loop {
@@ -86,9 +89,11 @@ impl BalanceWorker {
 
     /// Runs batches until `should_stop` says so. A full batch goes again at
     /// once; a smaller one waits `idle_wait`. A retryable error waits
-    /// `retry_wait`, doubling each time, and retries up to `retries` failures in
-    /// a row (any success resets the count). A permanent error, or running out
-    /// of retries, returns the error. All waiting goes through `pause`.
+    /// `retry_wait`, doubling each time with no cap, and retries up to
+    /// `retries` failures in a row (any success resets the count). A permanent
+    /// error, or running out of retries, returns the error. All waiting goes
+    /// through `pause`. `should_stop` is checked before each batch, not during
+    /// a `pause`, so stopping can take up to one wait.
     pub async fn run(
         &self,
         should_stop: impl Fn() -> bool,
@@ -120,6 +125,9 @@ impl BalanceWorker {
     /// Clears both balance tables and returns the checkpoint to the start, in
     /// one database transaction. It takes the checkpoint lock first, like a
     /// batch, so it waits for a running batch and no batch sees a half-reset.
+    /// The reset commits an empty state, and a missing row reads as zero, so
+    /// until the log is replayed (see [`rebuild`](Self::rebuild)) stored
+    /// balances read as zero or less than the log holds.
     pub async fn reset(&self) -> Result<(), WorkerError> {
         let mut tx = self.pool.begin().await.map_err(unbatched)?;
         self.reset_on(&mut tx).await?;
@@ -146,8 +154,13 @@ impl BalanceWorker {
             .map_err(unbatched)
     }
 
-    /// Resets, then replays the whole log. Returns how many ledger
-    /// transactions it counted.
+    /// Resets, then replays the log up to the safe line, as
+    /// [`catch_up`](Self::catch_up) does; postings the line is still holding
+    /// back are left for later and counted by [`lag`](Self::lag). Returns how
+    /// many ledger transactions it counted. The reset commits before the
+    /// replay, so during a rebuild stored balances are correct as of the
+    /// checkpoint: they fall to zero and rise as the replay catches up. Reads
+    /// are unreliable until the rebuild finishes.
     pub async fn rebuild(&self) -> Result<u64, WorkerError> {
         self.reset().await?;
         self.catch_up().await
@@ -184,7 +197,9 @@ impl BalanceWorker {
 
         // Only below the safe line: every database transaction older than the
         // snapshot's xmin has finished, so nothing can still commit behind
-        // the checkpoint.
+        // the checkpoint. sqlx has no `xid8` type, so it travels as text
+        // (`::text::bigint` to read, `$n::text::xid8` to bind); the values stay
+        // far below `i64::MAX`. The seed `'0'::xid8` means "nothing counted".
         let next = sqlx::query!(
             r#"SELECT id, db_tx_id::text::bigint AS "db_tx_id!" FROM transactions
                WHERE (db_tx_id, id) > ($1::text::xid8, $2)
@@ -232,7 +247,9 @@ fn unbatched(error: sqlx::Error) -> WorkerError {
 }
 
 /// Locks the checkpoint row and returns it. Every writer of the balance tables
-/// takes this lock first, so only one runs at a time.
+/// takes this lock first, so only one runs at a time and statement order may
+/// differ between writers without risking a deadlock. Tests that write balance
+/// rows directly bypass the lock on purpose.
 async fn lock_checkpoint(tx: &mut Transaction<'_, Postgres>) -> Result<Checkpoint, WorkerError> {
     let row = sqlx::query!(
         r#"SELECT db_tx_id::text::bigint AS "db_tx_id!", transaction_id

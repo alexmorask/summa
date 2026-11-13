@@ -212,22 +212,28 @@ impl From<LoadError> for SaveError {
 /// the balances and the checkpoint stay as they were.
 #[derive(Debug)]
 pub enum WorkerError {
-    /// A transient database failure: the connection or pool failed, the
-    /// server is short of resources or shutting down, or the statement lost a
-    /// serialization, deadlock or lock-wait race. Running the batch again is
-    /// safe and may succeed.
+    /// A transient database failure: the connection, I/O or pool failed, or
+    /// the database error has SQLSTATE class `08` (connection), `40`
+    /// (serialization failure or deadlock), `53` (insufficient resources) or
+    /// `57` (operator intervention, which includes shutdown and cancelled
+    /// queries such as `57014`, raised by `statement_timeout`), or code
+    /// `55P03` (lock not available). Running the batch again is safe and may
+    /// succeed.
     Unavailable(sqlx::Error),
     /// The database refused the batch for a reason that won't go away on its
-    /// own, such as a violated constraint, bad data, a raised exception or a
-    /// value that can't be decoded. Running the batch again fails the same
-    /// way, so the worker stops. `transactions` is the first and last ledger
-    /// transaction id of the batch when the failure came after the batch was
-    /// read, and `None` before that.
+    /// own: every database error that is not transient, such as a violated
+    /// constraint, bad data, a raised exception or a value that can't be
+    /// decoded. Running the batch again fails the same way, so the worker
+    /// stops. `transactions` is the first and last ledger transaction of the
+    /// batch in the order the worker reads them (`(db_tx_id, id)` order), so
+    /// the first id can be larger than the last; it is not a numeric range. It
+    /// is set for failures while the batch is being processed or written, and
+    /// `None` for failures before the batch is read or when committing.
     Rejected {
         transactions: Option<(i64, i64)>,
         source: sqlx::Error,
     },
-    /// Stored entries couldn't be read back.
+    /// Stored entries couldn't be read back. The error names the transaction.
     Corrupt(CorruptData),
     /// Adding `transaction` would take a balance total beyond what an `i64`
     /// holds. Running the batch again fails the same way.
@@ -316,7 +322,8 @@ impl Error for WorkerError {
 #[derive(Debug)]
 pub enum StoredBalanceError {
     /// The account isn't in the chart, or the balance doesn't fit in the
-    /// ledger's integer amounts.
+    /// ledger's integer amounts. The overflow case cannot occur today: the
+    /// balance is a subtraction of two non-negative `i64`s.
     Balance(BalanceError),
     /// The database couldn't be reached or failed. Reading again is safe.
     Unavailable(sqlx::Error),
