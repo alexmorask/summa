@@ -17,7 +17,7 @@ use super::store_tests::{
     store, store_at, wait_for_lock_waiter, waiting_query,
 };
 use super::worker::{BalanceWorker, BatchReport, WorkerConfig};
-use super::{Store, StoredTag};
+use super::{CorruptData, Store, StoredTag};
 use crate::account::{Account, AccountNumber, AccountType, Side};
 use crate::balance::{BalanceError, BalanceQuery, balance};
 use crate::chart::Chart;
@@ -500,6 +500,154 @@ async fn overflow_stops_with_the_transaction_named(pool: PgPool) {
     assert_eq!(totals(&pool, ASSET).await, (i64::MAX - 50, 0));
     assert_eq!(balance_row_count(&pool).await, 1);
     assert_eq!(checkpoint(&pool).await, (0, 0));
+}
+
+/// Writes a ledger transaction straight to the tables, bypassing the store,
+/// and returns its id. `entries` are (position, account, side, cents) and
+/// `tags` are (position, kind, value). A test writing a row the schema would
+/// refuse drops that constraint first.
+async fn insert_raw(
+    pool: &PgPool,
+    key_text: &str,
+    entries: &[(i16, AccountNumber, &str, i64)],
+    tags: &[(i16, &str, &str)],
+) -> i64 {
+    let mut tx = pool.begin().await.unwrap();
+    let id: i64 = sqlx::query_scalar("SELECT nextval('transaction_ids')")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO transactions (id, idempotency_key, description, effective_at, recorded_at) \
+         VALUES ($1, $2, 'Raw', $3, $4)",
+    )
+    .bind(id)
+    .bind(key_text)
+    .bind(effective())
+    .bind(clock_time())
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    for &(position, account, side, cents) in entries {
+        sqlx::query(
+            "INSERT INTO entries (transaction_id, position, account, side, amount, currency) \
+             VALUES ($1, $2, $3, $4, $5, 'USD')",
+        )
+        .bind(id)
+        .bind(position)
+        .bind(i64::from(account.get()))
+        .bind(side)
+        .bind(cents)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    }
+    for &(position, kind, value) in tags {
+        sqlx::query(
+            "INSERT INTO entry_tags (transaction_id, position, kind, value) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(id)
+        .bind(position)
+        .bind(kind)
+        .bind(value)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+    id
+}
+
+/// Counts one good transaction, then writes the bad one `insert_bad` makes and
+/// asserts the worker stops on it with `expected` (which must name the
+/// transaction), changing nothing, both from `run_batch` and from `run`.
+async fn assert_corrupt_row_stops_the_worker(
+    pool: &PgPool,
+    insert_bad: impl AsyncFnOnce() -> i64,
+    expected: impl Fn(i64) -> CorruptData,
+) {
+    save(&store(pool), &base()).await;
+    settle(pool).await;
+    let worker = worker(pool, 1_000);
+    assert_eq!(worker.catch_up().await.unwrap(), 1);
+    let before = snapshot(pool).await;
+    let end = checkpoint(pool).await;
+
+    let bad = insert_bad().await;
+    settle(pool).await;
+    let result = worker.run_batch().await;
+    let Err(ref error @ WorkerError::Corrupt(ref corrupt)) = result else {
+        panic!("expected Corrupt, got {result:?}");
+    };
+    assert_eq!(*corrupt, expected(bad));
+    assert!(!error.is_retryable());
+    let message = error.to_string();
+    assert!(message.contains(&format!("transaction {bad}")), "{message}");
+    assert_eq!(snapshot(pool).await, before);
+    assert_eq!(checkpoint(pool).await, end);
+
+    let (pause, waits) = recording_pause();
+    let stopped = worker.run(|| false, pause).await;
+    let Err(WorkerError::Corrupt(ref again)) = stopped else {
+        panic!("expected run to stop with Corrupt, got {stopped:?}");
+    };
+    assert_eq!(*again, expected(bad));
+    assert!(waits_of(&waits).is_empty());
+    assert_eq!(snapshot(pool).await, before);
+    assert_eq!(checkpoint(pool).await, end);
+}
+
+#[sqlx::test]
+async fn unknown_side_stops_the_worker_and_is_not_skipped(pool: PgPool) {
+    sqlx::query("ALTER TABLE entries DROP CONSTRAINT entries_side_valid")
+        .execute(&pool)
+        .await
+        .unwrap();
+    // Balanced on the debit and credit sides, plus an entry on neither.
+    let insert_bad = async || {
+        insert_raw(
+            &pool,
+            "sideways-1",
+            &[
+                (0, ASSET, "debit", 100),
+                (1, REVENUE, "credit", 100),
+                (2, ASSET, "sideways", 50),
+            ],
+            &[],
+        )
+        .await
+    };
+    assert_corrupt_row_stops_the_worker(&pool, insert_bad, |transaction| {
+        CorruptData::UnknownSide {
+            transaction,
+            side: "sideways".to_owned(),
+        }
+    })
+    .await;
+}
+
+#[sqlx::test]
+async fn orphan_tag_stops_the_worker_and_is_not_skipped(pool: PgPool) {
+    sqlx::query("ALTER TABLE entry_tags DROP CONSTRAINT entry_tags_entry_fkey")
+        .execute(&pool)
+        .await
+        .unwrap();
+    // A tag on position 5 of a transaction with entries at 0 and 1 only.
+    let insert_bad = async || {
+        insert_raw(
+            &pool,
+            "orphan-1",
+            &[(0, ASSET, "debit", 100), (1, REVENUE, "credit", 100)],
+            &[(5, "alpha", "1")],
+        )
+        .await
+    };
+    assert_corrupt_row_stops_the_worker(&pool, insert_bad, |transaction| CorruptData::OutOfRange {
+        transaction,
+        column: "tag position",
+        value: 5,
+    })
+    .await;
 }
 
 /// Records the base accounts up front. Otherwise a held-open first use of
