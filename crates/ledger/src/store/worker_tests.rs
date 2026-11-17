@@ -1631,3 +1631,71 @@ async fn unbalanced_transaction_stops_the_worker_and_is_not_skipped(pool: PgPool
     })
     .await;
 }
+
+// ---- the tag branches of the write guard ----
+
+fn alpha_tag() -> BalanceKey {
+    BalanceKey::Tag(ASSET, "alpha".to_owned(), "1".to_owned())
+}
+
+#[sqlx::test]
+async fn write_refuses_to_insert_a_tag_over_an_existing_row(pool: PgPool) {
+    record_base_accounts(&pool).await;
+    sqlx::query(
+        "INSERT INTO tag_balances (account, kind, value, debit_total, credit_total) \
+         VALUES ($1, 'alpha', '1', 100, 0)",
+    )
+    .bind(i64::from(ASSET.get()))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let before = snapshot(&pool).await;
+
+    // The caller believes the tag has no row, but it does.
+    let mut tx = pool.begin().await.unwrap();
+    let error = write_totals(
+        &mut tx,
+        vec![(alpha_tag(), five_and_seven())],
+        &HashSet::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        error
+            .as_database_error()
+            .and_then(|db| db.code())
+            .as_deref(),
+        Some("23505"),
+        "expected a unique violation, got {error:?}"
+    );
+    drop(tx);
+    assert_eq!(snapshot(&pool).await, before);
+}
+
+#[sqlx::test]
+async fn write_inserts_new_tags_and_updates_existing_ones(pool: PgPool) {
+    record_base_accounts(&pool).await;
+    sqlx::query(
+        "INSERT INTO tag_balances (account, kind, value, debit_total, credit_total) \
+         VALUES ($1, 'alpha', '1', 1, 1)",
+    )
+    .bind(i64::from(ASSET.get()))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let new = BalanceKey::Tag(ASSET, "alpha".to_owned(), "2".to_owned());
+    let mut tx = pool.begin().await.unwrap();
+    write_totals(
+        &mut tx,
+        vec![
+            (alpha_tag(), five_and_seven()),
+            (new, Totals::from_stored(9, 11).unwrap()),
+        ],
+        &HashSet::from([alpha_tag()]),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(tag_totals(&pool, ASSET, "alpha", "1").await, (5, 7));
+    assert_eq!(tag_totals(&pool, ASSET, "alpha", "2").await, (9, 11));
+}

@@ -221,7 +221,7 @@ pub enum WorkerError {
     /// `55P03` (lock not available). Running the batch again is safe and may
     /// succeed.
     Unavailable(sqlx::Error),
-    /// The worker stopped because the database refused the batch for a reason that won't go away on its
+    /// The database refused the batch for a reason that won't go away on its
     /// own: every database error that is not transient, such as a violated
     /// constraint, bad data, a raised exception or a value that can't be
     /// decoded. Running the batch again fails the same way, so the worker
@@ -236,7 +236,10 @@ pub enum WorkerError {
         transactions: Option<(TransactionId, TransactionId)>,
         source: sqlx::Error,
     },
-    /// Stored entries couldn't be read back. The error names the transaction.
+    /// Stored data is wrong in a way the ledger never writes: an entry that
+    /// can't be read back, a transaction whose debits and credits differ, a
+    /// negative stored total, or a missing checkpoint row. The error names
+    /// the transaction or account where it can.
     Corrupt(CorruptData),
     /// Adding `transaction` would take a balance total beyond what an `i64`
     /// holds. Running the batch again fails the same way.
@@ -336,7 +339,8 @@ pub enum StoredBalanceError {
     Balance(BalanceError),
     /// The database couldn't be reached or failed. Reading again is safe.
     Unavailable(sqlx::Error),
-    /// A stored total is negative, which its table forbids.
+    /// Stored data is wrong in a way the ledger never writes: a negative
+    /// stored total, or a missing checkpoint row.
     Corrupt(CorruptData),
 }
 
