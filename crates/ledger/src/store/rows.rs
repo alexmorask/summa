@@ -115,6 +115,14 @@ pub enum CorruptData {
     InvalidIdempotencyKey { transaction: i64, key: String },
     /// Two entry rows share a position.
     DuplicatePosition { transaction: i64, position: i16 },
+    /// The one-row checkpoint table has no row. The migration seeds it and
+    /// nothing deletes it.
+    MissingCheckpoint,
+    /// A stored balance total is negative, which its table forbids.
+    NegativeTotal { account: i64 },
+    /// A ledger transaction's debits and credits differ. The save path never
+    /// writes one, so the log was changed around the ledger.
+    Unbalanced { transaction: i64 },
     /// Two tag rows share a position and kind.
     DuplicateTag {
         transaction: i64,
@@ -169,6 +177,17 @@ impl fmt::Display for CorruptData {
                 f,
                 "corrupt data in transaction {transaction}: more than one entry at position {position}"
             ),
+            CorruptData::MissingCheckpoint => {
+                write!(f, "corrupt data: the balance checkpoint row is missing")
+            }
+            CorruptData::NegativeTotal { account } => write!(
+                f,
+                "corrupt data in the stored balances of account {account}: a total is negative"
+            ),
+            CorruptData::Unbalanced { transaction } => write!(
+                f,
+                "corrupt data in transaction {transaction}: its debits and credits differ"
+            ),
             CorruptData::DuplicateTag {
                 transaction,
                 position,
@@ -191,6 +210,55 @@ fn id(transaction: i64, column: &'static str, value: i64) -> Result<TransactionI
             column,
             value,
         })
+}
+
+/// One entry row, parsed: where it sits in its transaction, and what it posts.
+pub(crate) struct ParsedEntry {
+    pub(crate) position: i16,
+    pub(crate) account: AccountNumber,
+    pub(crate) side: Side,
+    pub(crate) amount: Money<Usd>,
+}
+
+/// Parses one entry row of `transaction`. The currency must be one the
+/// ledger knows, and the amount positive.
+pub(crate) fn parse_entry(transaction: i64, row: EntryRow) -> Result<ParsedEntry, CorruptData> {
+    if CurrencyCode::parse(&row.currency).is_none() {
+        return Err(CorruptData::UnknownCurrency {
+            transaction,
+            code: row.currency,
+        });
+    }
+    let side = match row.side.as_str() {
+        "debit" => Side::Debit,
+        "credit" => Side::Credit,
+        _ => {
+            return Err(CorruptData::UnknownSide {
+                transaction,
+                side: row.side,
+            });
+        }
+    };
+    let account = u32::try_from(row.account)
+        .map(AccountNumber::new)
+        .map_err(|_| CorruptData::OutOfRange {
+            transaction,
+            column: "account",
+            value: row.account,
+        })?;
+    if row.amount <= 0 {
+        return Err(CorruptData::OutOfRange {
+            transaction,
+            column: "amount",
+            value: row.amount,
+        });
+    }
+    Ok(ParsedEntry {
+        position: row.position,
+        account,
+        side,
+        amount: Money::from_minor_units(row.amount),
+    })
 }
 
 /// Turns one transaction's rows into a posted transaction. Entries come back
@@ -216,44 +284,19 @@ pub(crate) fn assemble<T: StoredTag>(
 
     let mut parsed: BTreeMap<i16, (AccountNumber, Side, Money<Usd>, Vec<T>)> = BTreeMap::new();
     for row in entries {
-        if CurrencyCode::parse(&row.currency).is_none() {
-            return Err(CorruptData::UnknownCurrency {
-                transaction: tx,
-                code: row.currency,
-            });
-        }
-        let side = match row.side.as_str() {
-            "debit" => Side::Debit,
-            "credit" => Side::Credit,
-            _ => {
-                return Err(CorruptData::UnknownSide {
-                    transaction: tx,
-                    side: row.side,
-                });
-            }
-        };
-        let account = u32::try_from(row.account)
-            .map(AccountNumber::new)
-            .map_err(|_| CorruptData::OutOfRange {
-                transaction: tx,
-                column: "account",
-                value: row.account,
-            })?;
-        if row.amount <= 0 {
-            return Err(CorruptData::OutOfRange {
-                transaction: tx,
-                column: "amount",
-                value: row.amount,
-            });
-        }
-        let amount = Money::from_minor_units(row.amount);
+        let ParsedEntry {
+            position,
+            account,
+            side,
+            amount,
+        } = parse_entry(tx, row)?;
         if parsed
-            .insert(row.position, (account, side, amount, Vec::new()))
+            .insert(position, (account, side, amount, Vec::new()))
             .is_some()
         {
             return Err(CorruptData::DuplicatePosition {
                 transaction: tx,
-                position: row.position,
+                position,
             });
         }
     }

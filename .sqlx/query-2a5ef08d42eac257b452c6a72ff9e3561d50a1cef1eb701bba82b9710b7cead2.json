@@ -1,0 +1,33 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT db_tx_id::text::bigint AS \"db_tx_id!\", transaction_id\n           FROM balance_checkpoint FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "db_tx_id!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "transaction_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "balance_checkpoint",
+            "name": "transaction_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      false
+    ]
+  },
+  "hash": "2a5ef08d42eac257b452c6a72ff9e3561d50a1cef1eb701bba82b9710b7cead2"
+}

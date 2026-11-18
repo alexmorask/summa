@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE balance_checkpoint SET db_tx_id = $1::text::xid8, transaction_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "95b17a674e38b2017b3bdd61f08d741a0922733f7f17b0061ff65f50340050c6"
+}

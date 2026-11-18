@@ -3,13 +3,18 @@
 mod confirmed;
 mod error;
 mod load;
+mod netting;
 mod rows;
 mod save;
 #[cfg(test)]
 mod schema_tests;
 #[cfg(test)]
 mod store_tests;
+mod stored_balance;
 mod stored_tag;
+mod worker;
+#[cfg(test)]
+mod worker_tests;
 
 use std::sync::Arc;
 
@@ -22,9 +27,11 @@ use crate::transaction::PostedTransaction;
 
 use confirmed::ConfirmedAccounts;
 
-pub use error::{LoadError, SaveError};
+pub use error::{InvalidWorkerConfig, LoadError, SaveError, StoredBalanceError, WorkerError};
 pub use rows::CorruptData;
+pub use stored_balance::StoredBalance;
 pub use stored_tag::StoredTag;
+pub use worker::{BalanceWorker, BatchReport, WorkerConfig};
 
 /// The ledger's PostgreSQL store. It owns the chart posting checks against
 /// and the clock that stamps recorded times; callers supply neither per call.

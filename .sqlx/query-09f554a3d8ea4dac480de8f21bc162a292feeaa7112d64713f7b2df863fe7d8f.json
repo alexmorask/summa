@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE tag_balances b SET debit_total = u.debit_total, credit_total = u.credit_total FROM UNNEST($1::bigint[], $2::text[], $3::text[], $4::bigint[], $5::bigint[]) AS u(account, kind, value, debit_total, credit_total) WHERE b.account = u.account AND b.kind = u.kind AND b.value = u.value",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "TextArray",
+        "TextArray",
+        "Int8Array",
+        "Int8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "09f554a3d8ea4dac480de8f21bc162a292feeaa7112d64713f7b2df863fe7d8f"
+}

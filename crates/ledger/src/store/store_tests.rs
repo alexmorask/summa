@@ -22,25 +22,25 @@ use crate::test_support::{
 use crate::transaction::{PostError, TransactionId, UnpostedTransaction};
 
 /// 2026-10-01T12:00:00Z: the store's clock in these tests.
-fn clock_time() -> DateTime<Utc> {
+pub(super) fn clock_time() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 10, 1, 12, 0, 0).unwrap()
 }
 
 /// An effective time safely before `clock_time()`.
-fn effective() -> DateTime<Utc> {
+pub(super) fn effective() -> DateTime<Utc> {
     clock_time() - TimeDelta::days(1)
 }
 
-fn store_at(pool: &PgPool, chart: Chart, now: DateTime<Utc>) -> Store<TestTag> {
+pub(super) fn store_at(pool: &PgPool, chart: Chart, now: DateTime<Utc>) -> Store<TestTag> {
     Store::new(pool.clone(), chart, Arc::new(FixedClock::new(now)))
 }
 
-fn store(pool: &PgPool) -> Store<TestTag> {
+pub(super) fn store(pool: &PgPool) -> Store<TestTag> {
     store_at(pool, chart(), clock_time())
 }
 
 /// A transaction built from `entries`, against `chart`.
-fn build_in(
+pub(super) fn build_in(
     chart: &Chart,
     key_text: &str,
     description: &str,
@@ -61,7 +61,7 @@ fn build_in(
         .unwrap()
 }
 
-fn build(
+pub(super) fn build(
     key_text: &str,
     description: &str,
     effective_at: DateTime<Utc>,
@@ -70,16 +70,21 @@ fn build(
     build_in(&chart(), key_text, description, effective_at, entries)
 }
 
-/// Debit asset, credit revenue, 100 cents, with one tag on the debit.
-fn base_entries() -> Vec<TestEntry> {
+/// Debit asset, credit revenue, 100 cents, with `Alpha(1)` on the debit.
+pub(super) fn base_entries() -> Vec<TestEntry> {
     vec![
         (ASSET, Side::Debit, 100, vec![TestTag::Alpha(1)]),
         (REVENUE, Side::Credit, 100, vec![]),
     ]
 }
 
-fn base() -> UnpostedTransaction<Usd, TestTag> {
-    build("renewal-1", "Renewal", effective(), &base_entries())
+/// The base entries under idempotency key `key_text`.
+pub(super) fn base_keyed(key_text: &str) -> UnpostedTransaction<Usd, TestTag> {
+    build(key_text, "Renewal", effective(), &base_entries())
+}
+
+pub(super) fn base() -> UnpostedTransaction<Usd, TestTag> {
+    base_keyed("renewal-1")
 }
 
 async fn row_count(pool: &PgPool) -> i64 {
@@ -715,6 +720,23 @@ async fn corrupt_stored_row_is_reported(pool: PgPool) {
     }
 }
 
+/// Checks `check` every 20 ms until it holds, for at most 10 s, then panics
+/// naming `what`. Polling is bounded, not timed: it ends as soon as the
+/// condition holds.
+pub(super) async fn poll_until(what: &str, check: impl AsyncFn() -> bool) {
+    let polling = async {
+        while !check().await {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    };
+    if tokio::time::timeout(std::time::Duration::from_secs(10), polling)
+        .await
+        .is_err()
+    {
+        panic!("gave up after 10 s waiting until {what}");
+    }
+}
+
 /// Counts the backends in this database that are waiting on a lock.
 async fn lock_waiters(pool: &PgPool) -> i64 {
     sqlx::query_scalar::<_, i64>(
@@ -726,17 +748,44 @@ async fn lock_waiters(pool: &PgPool) -> i64 {
     .unwrap()
 }
 
-/// Waits until some save is blocked on a lock. Polling is bounded, not timed:
-/// it ends as soon as the interleaving has happened.
-async fn wait_for_lock_waiter(pool: &PgPool) {
-    let polling = async {
-        while lock_waiters(pool).await < 1 {
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-    };
-    tokio::time::timeout(std::time::Duration::from_secs(10), polling)
+/// The text of the statement waiting on a lock in this database.
+pub(super) async fn waiting_query(pool: &PgPool) -> String {
+    sqlx::query_scalar::<_, String>(
+        "SELECT query FROM pg_stat_activity \
+         WHERE datname = current_database() AND wait_event_type = 'Lock'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// Waits until some statement is blocked on a lock.
+pub(super) async fn wait_for_lock_waiter(pool: &PgPool) {
+    poll_until("some statement blocks on a lock", async || {
+        lock_waiters(pool).await >= 1
+    })
+    .await;
+}
+
+/// Inserts `transaction` in a database transaction that stays open, and
+/// returns it with the posted transaction.
+pub(super) async fn hold_open(
+    pool: &PgPool,
+    store: &Store<TestTag>,
+    transaction: &UnpostedTransaction<Usd, TestTag>,
+) -> (
+    sqlx::Transaction<'static, sqlx::Postgres>,
+    crate::transaction::PostedTransaction<Usd, TestTag>,
+) {
+    let mut tx = pool.begin().await.unwrap();
+    let Attempt::Inserted(posted) = store
+        .insert_on(&mut tx, transaction, clock_time())
         .await
-        .expect("save B never blocked on save A's uncommitted insert");
+        .unwrap()
+    else {
+        panic!("the held posting should have inserted");
+    };
+    (tx, posted)
 }
 
 /// Save A inserts `a` and stays open; save B of `b` runs on its own store and
@@ -753,11 +802,7 @@ async fn race_between(
     crate::transaction::PostedTransaction<Usd, TestTag>,
     Result<Saved<TestTag>, SaveError>,
 ) {
-    let mut tx_a = pool.begin().await.unwrap();
-    let Attempt::Inserted(posted_a) = store_a.insert_on(&mut tx_a, a, clock_time()).await.unwrap()
-    else {
-        panic!("save A should have inserted");
-    };
+    let (tx_a, posted_a) = hold_open(pool, &store_a, a).await;
 
     let b = tokio::spawn(async move { store_b.save(&b).await });
     wait_for_lock_waiter(pool).await;
